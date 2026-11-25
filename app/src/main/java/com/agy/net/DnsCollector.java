@@ -15,7 +15,7 @@ import java.util.List;
 /**
  * All visible DNS servers (active network first, then every other), IPv4
  * ordered before IPv6 and de-duplicated. Scoped IPv6 addresses are dropped.
- * Falls back to 1.1.1.1 / 8.8.8.8 when nothing is visible.
+ * Falls back to 1.1.1.1 / 8.8.8.8 / 9.9.9.9 when nothing is visible.
  */
 public final class DnsCollector {
 
@@ -49,8 +49,8 @@ public final class DnsCollector {
         servers.addAll(ipv6);
         if (servers.isEmpty()) {
             servers.add("1.1.1.1");
-            servers.add("77.88.8.8");
             servers.add("8.8.8.8");
+            servers.add("9.9.9.9");
         }
         return servers;
     }

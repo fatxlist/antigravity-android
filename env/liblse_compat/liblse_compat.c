@@ -11,6 +11,9 @@
 #ifndef HWCAP_ATOMICS
 #define HWCAP_ATOMICS (1 << 8)
 #endif
+#ifndef SA_ONSTACK
+#define SA_ONSTACK 0x08000000
+#endif
 
 /* Linux kernel sigaction structure for AArch64 rt_sigaction syscall (134) */
 struct kernel_sigaction {
@@ -794,7 +797,7 @@ __attribute__((constructor(101))) static void init_lse_compat(void) {
     struct kernel_sigaction ksa;
     memset(&ksa, 0, sizeof(ksa));
     ksa.k_handler = sigill_handler;
-    ksa.sa_flags = SA_SIGINFO | SA_NODEFER;
+    ksa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_ONSTACK;
     ksa.sa_restorer = NULL;
     ksa.sa_mask = 0;
 

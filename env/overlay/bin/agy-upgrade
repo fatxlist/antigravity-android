@@ -47,13 +47,13 @@ cmd_backup() {
     echo "============================================================"
     echo "[*] Destination: $dest"
     
-    "$PYTHON_BIN" - << PYEOF
+    AGY_BACKUP_PATH="$dest" AGY_BACKUP_ROOT="$BACKUP_ROOT" "$PYTHON_BIN" - << 'PYEOF'
 import os, sys, json, tarfile, time, subprocess, shutil
 
 home = os.environ.get("HOME", "")
 prefix = os.environ.get("PREFIX", "")
-backup_path = "$dest"
-backup_root = "$BACKUP_ROOT"
+backup_path = os.environ["AGY_BACKUP_PATH"]
+backup_root = os.environ["AGY_BACKUP_ROOT"]
 os.makedirs(backup_root, exist_ok=True)
 
 print(f"[*] Scanning Home: {home}")
@@ -148,12 +148,12 @@ cmd_restore() {
     echo "============================================================"
     echo "[*] Source: $src"
 
-    "$PYTHON_BIN" - << PYEOF
+    AGY_BACKUP_PATH="$src" "$PYTHON_BIN" - << 'PYEOF'
 import os, sys, json, tarfile, subprocess
 
 home = os.environ.get("HOME", "")
 prefix = os.environ.get("PREFIX", "")
-backup_path = "$src"
+backup_path = os.environ["AGY_BACKUP_PATH"]
 
 print(f"[*] Restoring to: {home}")
 
@@ -235,7 +235,7 @@ cmd_apply() {
 
     if [ "$rish_ok" -eq 1 ]; then
         echo "[*] Shizuku is active! Performing silent in-place upgrade via pm install -r..."
-        if rish -c "pm install -r \"$apk\""; then
+        if rish -c "pm install -r $(printf %q "$apk")"; then
             echo "[OK] APK installed successfully via Shizuku!"
         else
             echo "[WARN] Shizuku pm install returned non-zero code."

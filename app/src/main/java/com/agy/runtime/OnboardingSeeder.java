@@ -16,6 +16,9 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Materializes a fully-onboarded state before the core starts, so the Welcome
@@ -29,6 +32,9 @@ public final class OnboardingSeeder {
     private static final String TAG = "OnboardingSeeder";
     private static final String ANDROID_MCP_SERVER_KEY = "android-device";
     private static final String CHROME_DEVTOOLS_MCP_SERVER_KEY = "chrome_devtools";
+    public static final String TEMPLATE_INSTALL_UUID = "5b21c18a-32a1-46bf-95f3-19a809c25df0";
+    private static final Pattern INSTALL_UUID_PATTERN =
+            Pattern.compile("installation_uuid:\\s*\"([^\"]+)\"");
 
     private OnboardingSeeder() {
     }
@@ -39,14 +45,16 @@ public final class OnboardingSeeder {
                 Log.w(TAG, "cannot create " + appData);
                 return;
             }
-            seedStateFile(appContext, "jetski_state.pbtxt", new File(appData, "jetski_state.pbtxt"));
-            seedStateFile(appContext, "antigravity_state.pbtxt",
-                    new File(appData, "antigravity_state.pbtxt"));
+            File jetskiState = new File(appData, "jetski_state.pbtxt");
+            File antigravityState = new File(appData, "antigravity_state.pbtxt");
+            String installUuid = resolveInstallationUuid(jetskiState, antigravityState);
+            seedStateFile(appContext, "jetski_state.pbtxt", jetskiState, installUuid);
+            seedStateFile(appContext, "antigravity_state.pbtxt", antigravityState, installUuid);
 
             // Seed default agent rules (AGENTS.md) into ~/.gemini/config/AGENTS.md
             File configDir = projects != null ? projects.getParentFile() : null;
             if (configDir != null && (configDir.isDirectory() || configDir.mkdirs())) {
-                seedStateFile(appContext, "AGENTS.md", new File(configDir, "AGENTS.md"));
+                seedStateFile(appContext, "AGENTS.md", new File(configDir, "AGENTS.md"), null);
             }
 
             // Non-destructively register the bundled android-device and chrome_devtools stdio MCP servers
@@ -397,7 +405,45 @@ public final class OnboardingSeeder {
         return false;
     }
 
-    private static void seedStateFile(Context appContext, String assetName, File target)
+    public static String replaceTemplateUuid(String content, String installationUuid) {
+        if (content == null || installationUuid == null || installationUuid.trim().isEmpty()) {
+            return content;
+        }
+        return content.replace(TEMPLATE_INSTALL_UUID, installationUuid.trim());
+    }
+
+    private static String resolveInstallationUuid(File primary, File secondary) {
+        String existing = extractInstallationUuid(primary);
+        if (existing != null) {
+            return existing;
+        }
+        existing = extractInstallationUuid(secondary);
+        if (existing != null) {
+            return existing;
+        }
+        return UUID.randomUUID().toString();
+    }
+
+    private static String extractInstallationUuid(File stateFile) {
+        if (stateFile == null || !stateFile.isFile() || stateFile.length() == 0) {
+            return null;
+        }
+        try (InputStream in = new FileInputStream(stateFile)) {
+            String content = IoUtil.readAll(in, "UTF-8");
+            Matcher m = INSTALL_UUID_PATTERN.matcher(content);
+            if (m.find()) {
+                String uuid = m.group(1) != null ? m.group(1).trim() : "";
+                if (!uuid.isEmpty() && !TEMPLATE_INSTALL_UUID.equals(uuid)) {
+                    return uuid;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static void seedStateFile(Context appContext, String assetName, File target,
+                                      String installationUuid)
             throws Exception {
         if (target.isFile() && target.length() > 0) {
             Log.i(TAG, "state present; left untouched: " + target);
@@ -406,6 +452,9 @@ public final class OnboardingSeeder {
         try (InputStream in = appContext.getAssets().open(
                 RuntimePaths.SEED_ASSET + "/" + assetName)) {
             String content = IoUtil.readAll(in, "UTF-8");
+            if (installationUuid != null) {
+                content = replaceTemplateUuid(content, installationUuid);
+            }
             AtomicFileWriter.writeText(target, content);
         }
         Log.i(TAG, "seeded onboarding state (was missing): " + target);

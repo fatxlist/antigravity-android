@@ -64,6 +64,8 @@ public class MainActivity extends Activity
     private static final int REQUEST_STORAGE = 100;
     private static final int REQUEST_FILE_CHOOSER = 1002;
     private static final int REQUEST_RECORD_AUDIO = 1003;
+    private static final int REQUEST_POST_NOTIFICATIONS = 1004;
+    private static final String PREF_ASKED_NOTIFICATIONS = "asked_post_notifications";
     private static final long SPLASH_TIMEOUT_MS = 60000;
     private static final long POLL_STARTUP_INTERVAL_MS = 50;
     private static final long POLL_READY_INTERVAL_MS = 1000;
@@ -588,8 +590,30 @@ public class MainActivity extends Activity
             AppLifecycle.resume(webViewHost.getWebView());
         }
         refreshTheme();
+        requestNotificationPermissionIfNeeded();
         handler.removeCallbacks(pollServer);
         handler.post(pollServer);
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && !android.os.Environment.isExternalStorageManager()) {
+            return;
+        }
+        if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        android.content.SharedPreferences prefs = getSharedPreferences("agy_prefs", MODE_PRIVATE);
+        if (prefs.getBoolean(PREF_ASKED_NOTIFICATIONS, false)) {
+            return;
+        }
+        prefs.edit().putBoolean(PREF_ASKED_NOTIFICATIONS, true).apply();
+        requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},
+                REQUEST_POST_NOTIFICATIONS);
     }
 
     private void refreshTheme() {
@@ -609,7 +633,7 @@ public class MainActivity extends Activity
 
     @Override
     public void onBackPressed() {
-        if (!BackNavigator.handle(webViewHost != null ? webViewHost.getWebView() : null)) {
+        if (!BackNavigator.handle(this, webViewHost != null ? webViewHost.getWebView() : null)) {
             super.onBackPressed();
         }
     }

@@ -112,41 +112,80 @@ public class AppFileProvider extends ContentProvider {
         try {
             String canonical = file.getCanonicalPath();
             Context context = getContext();
-            if (context != null) {
-                File filesDir = context.getFilesDir();
-                File cacheDir = context.getCacheDir();
-                File appDataDir = context.getApplicationInfo() != null && context.getApplicationInfo().dataDir != null
-                        ? new File(context.getApplicationInfo().dataDir) : null;
-                File extStorage = Environment.getExternalStorageDirectory();
-                File extFiles = context.getExternalFilesDir(null);
-                File extCache = context.getExternalCacheDir();
+            if (context == null) {
+                throw new SecurityException("Provider context unavailable");
+            }
+            File filesDir = context.getFilesDir();
+            File cacheDir = context.getCacheDir();
+            File extStorage = Environment.getExternalStorageDirectory();
+            File extFiles = context.getExternalFilesDir(null);
+            File extCache = context.getExternalCacheDir();
 
-                File[] allowedDirs = new File[] {
-                    filesDir,
-                    cacheDir,
-                    appDataDir,
-                    extStorage,
-                    extFiles,
-                    extCache
-                };
-
-                boolean isAllowed = false;
-                for (File dir : allowedDirs) {
-                    if (dir != null) {
-                        String allowedDir = dir.getCanonicalPath();
-                        if (canonical.equals(allowedDir) || canonical.startsWith(allowedDir + File.separator)) {
-                            isAllowed = true;
-                            break;
-                        }
-                    }
-                }
-                if (!isAllowed) {
-                    throw new SecurityException("Path traversal attempt or unauthorized path: " + canonical);
-                }
+            File[] allowedDirs = new File[] {
+                filesDir,
+                cacheDir,
+                extStorage,
+                extFiles,
+                extCache
+            };
+            String[] allowedRootsCanonical = new String[allowedDirs.length];
+            for (int i = 0; i < allowedDirs.length; i++) {
+                allowedRootsCanonical[i] = allowedDirs[i] != null
+                        ? allowedDirs[i].getCanonicalPath() : null;
+            }
+            String filesCanonical = filesDir != null ? filesDir.getCanonicalPath() : null;
+            if (!isAllowedPath(canonical, filesCanonical, allowedRootsCanonical)) {
+                throw new SecurityException("Path traversal attempt or unauthorized path: " + canonical);
             }
             return new File(canonical);
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to resolve canonical path: " + path, e);
         }
+    }
+
+    /**
+     * Validates that a canonical path lies under an allowed storage root and does not target
+     * sensitive credentials, runtime state, or private preferences/databases.
+     */
+    public static boolean isAllowedPath(String canonicalPath, String filesDirCanonical,
+                                        String[] allowedRootsCanonical) {
+        if (canonicalPath == null || canonicalPath.isEmpty() || allowedRootsCanonical == null) {
+            return false;
+        }
+        boolean underRoot = false;
+        for (String root : allowedRootsCanonical) {
+            if (root != null && !root.isEmpty()
+                    && (canonicalPath.equals(root) || canonicalPath.startsWith(root + File.separator))) {
+                underRoot = true;
+                break;
+            }
+        }
+        if (!underRoot) {
+            return false;
+        }
+        if (filesDirCanonical != null && !filesDirCanonical.isEmpty()) {
+            String[] deniedUnderFiles = new String[] {
+                filesDirCanonical + File.separator + ".gemini",
+                filesDirCanonical + File.separator + "logs" + File.separator + "gateway.token",
+                filesDirCanonical + File.separator + "logs" + File.separator + "core.state.json",
+                filesDirCanonical + File.separator + "logs" + File.separator + "approvals.json"
+            };
+            for (String denied : deniedUnderFiles) {
+                if (canonicalPath.equals(denied) || canonicalPath.startsWith(denied + File.separator)) {
+                    return false;
+                }
+            }
+            File filesParent = new File(filesDirCanonical).getParentFile();
+            if (filesParent != null) {
+                String appDataCanonical = filesParent.getPath();
+                String sharedPrefs = appDataCanonical + File.separator + "shared_prefs";
+                String databases = appDataCanonical + File.separator + "databases";
+                if (canonicalPath.equals(sharedPrefs) || canonicalPath.startsWith(sharedPrefs + File.separator)
+                        || canonicalPath.equals(databases) || canonicalPath.startsWith(databases + File.separator)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 }

@@ -258,9 +258,22 @@ public final class NotificationHandler {
                     ? new Notification.Builder(context, channel)
                     : new Notification.Builder(context);
 
+            Intent openIntent = new Intent(context, com.agy.ui.MainActivity.class);
+            openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int contentPiFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                contentPiFlags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            int contentReqCode = ("content:" + tag + ":" + id).hashCode();
+            PendingIntent contentIntent = PendingIntent.getActivity(
+                    context, contentReqCode, openIntent, contentPiFlags);
+
             builder.setContentTitle(title)
                     .setContentText(message)
                     .setSmallIcon(icon)
+                    .setContentIntent(contentIntent)
                     .setOngoing(ongoing)
                     .setAutoCancel(!ongoing);
 

@@ -62,6 +62,66 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+PYTHON_BIN=""
+for p in "$PREFIX/bin/python3" "$(command -v python3 2>/dev/null || true)"; do
+    if [ -n "$p" ] && [ -x "$p" ]; then
+        PYTHON_BIN="$p"
+        break
+    fi
+done
+
+gateway_notify() {
+    local action="$1"
+    local title="$2"
+    local message="$3"
+    local tag="$4"
+    local port="${AGY_GATEWAY_PORT:-45159}"
+    local token_file="${AGY_GATEWAY_TOKEN_FILE:-$HOME/logs/gateway.token}"
+    if [ -z "$PYTHON_BIN" ] || [ ! -r "$token_file" ]; then
+        return 1
+    fi
+    AGY_NOTIFY_ACTION="$action" \
+    AGY_NOTIFY_TITLE="$title" \
+    AGY_NOTIFY_MESSAGE="$message" \
+    AGY_NOTIFY_TAG="$tag" \
+    AGY_NOTIFY_PORT="$port" \
+    AGY_NOTIFY_TOKEN_FILE="$token_file" \
+    "$PYTHON_BIN" -B - << 'PYEOF' 2>/dev/null
+import json, os, urllib.request, zlib
+
+token_file = os.environ["AGY_NOTIFY_TOKEN_FILE"]
+with open(token_file, "r", encoding="utf-8") as f:
+    token = f.read().strip()
+if not token:
+    raise SystemExit(1)
+
+action = os.environ["AGY_NOTIFY_ACTION"]
+tag = os.environ["AGY_NOTIFY_TAG"]
+stable_id = (zlib.crc32(tag.encode("utf-8")) & 0x7fffffff) or 1
+payload = {
+    "action": action,
+    "tag": tag,
+    "id": stable_id,
+    "title": os.environ["AGY_NOTIFY_TITLE"],
+    "message": os.environ["AGY_NOTIFY_MESSAGE"],
+}
+port = os.environ.get("AGY_NOTIFY_PORT", "45159")
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/gateway/notify",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "X-Agy-Gateway-Token": token,
+    },
+    method="POST",
+)
+with urllib.request.urlopen(req, timeout=3) as resp:
+    data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    if not data.get("ok"):
+        raise SystemExit(1)
+PYEOF
+}
+
 if [ "$CMD" = "post" ]; then
     if [ -z "$MESSAGE" ] && [ -n "$TITLE" ]; then
         MESSAGE="$TITLE"
@@ -71,6 +131,10 @@ if [ "$CMD" = "post" ]; then
     BODY_TEXT="$MESSAGE"
     if [ -n "$SUBTITLE" ]; then
         BODY_TEXT="[$SUBTITLE] $MESSAGE"
+    fi
+
+    if gateway_notify "post" "$TITLE" "$BODY_TEXT" "$TAG"; then
+        exit 0
     fi
 
     if [ -x "$RISH_BIN" ]; then
@@ -101,6 +165,9 @@ if [ "$CMD" = "post" ]; then
     echo "[agy-notify] notification queued: $TITLE - $MESSAGE"
 
 elif [ "$CMD" = "cancel" ]; then
+    if gateway_notify "cancel" "" "" "$TAG"; then
+        exit 0
+    fi
     if [ -x "$RISH_BIN" ]; then
         "$RISH_BIN" -c "cmd notification cancel $(printf %q "$TAG")" 2>/dev/null || true
     fi

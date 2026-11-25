@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
@@ -11,6 +12,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Base64InputStream;
 import android.util.Log;
@@ -73,6 +75,9 @@ public final class FileDownloader {
     }
 
     public static boolean hasStoragePermission(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             return context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     == PackageManager.PERMISSION_GRANTED;
@@ -109,9 +114,27 @@ public final class FileDownloader {
             }
             return;
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (task != null) {
+                safeDelete(task.pendingBlobFile);
+            }
+            clearPendingTask();
+            Toast.makeText(activity, "All Files Access is required to save downloads", Toast.LENGTH_LONG).show();
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" + activity.getPackageName()));
+                activity.startActivity(intent);
+            } catch (Exception e) {
+                try {
+                    activity.startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                } catch (Exception ignored) {
+                }
+            }
+            return;
+        }
         setPendingTask(task);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Toast.makeText(activity, "Требуется доступ к файлам для скачивания", Toast.LENGTH_SHORT).show();
+            Toast.makeText(activity, "Storage access is required for downloads", Toast.LENGTH_SHORT).show();
             activity.requestPermissions(new String[]{
                     Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     Manifest.permission.READ_EXTERNAL_STORAGE
@@ -138,7 +161,7 @@ public final class FileDownloader {
                 safeDelete(task.pendingBlobFile);
             }
             if (activity != null) {
-                Toast.makeText(activity, "Разрешение на доступ к файлам отклонено", Toast.LENGTH_LONG).show();
+                Toast.makeText(activity, "Storage permission denied", Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -195,7 +218,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(appContext, "Ошибка сохранения файла: " + e.getMessage(),
+                            Toast.makeText(appContext, "Failed to save file: " + e.getMessage(),
                                     Toast.LENGTH_SHORT).show();
                         }
                     });
@@ -230,7 +253,7 @@ public final class FileDownloader {
                 String safeName = URLUtil.guessFileName(rawUrl, task.contentDisposition, task.mimeType);
                 extractBlobViaJs(webView, rawUrl, safeName, task.mimeType);
             } else {
-                Toast.makeText(activity, "Невозможно скачать blob без WebView", Toast.LENGTH_SHORT).show();
+                Toast.makeText(activity, "Cannot download blob without WebView", Toast.LENGTH_SHORT).show();
             }
             return;
         }
@@ -243,7 +266,7 @@ public final class FileDownloader {
                 || uri.getHost() == null || uri.getHost().isEmpty()
                 || uri.getUserInfo() != null) {
             Log.w(TAG, "refusing non-web or credential-bearing download URL");
-            Toast.makeText(activity, "Недопустимый адрес загрузки", Toast.LENGTH_SHORT).show();
+            Toast.makeText(activity, "Invalid download URL", Toast.LENGTH_SHORT).show();
             return;
         }
         if (TrustedCoreOrigin.matches(uri, RuntimeConfig.httpsPort(activity))) {
@@ -263,7 +286,7 @@ public final class FileDownloader {
                 fileName = "download_" + System.currentTimeMillis();
             }
             request.setTitle(fileName);
-            request.setDescription("Скачивание файла");
+            request.setDescription("Downloading file");
             request.allowScanningByMediaScanner();
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
@@ -279,7 +302,7 @@ public final class FileDownloader {
             DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm != null) {
                 dm.enqueue(request);
-                Toast.makeText(activity, "Скачивание: " + fileName, Toast.LENGTH_SHORT).show();
+                Toast.makeText(activity, "Downloading: " + fileName, Toast.LENGTH_SHORT).show();
                 Log.i(TAG, "Download enqueued: " + fileName + " url="
                         + SensitiveDataRedactor.safeUrl(rawUrl));
             }
@@ -343,7 +366,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(appContext, "Сохранено в Загрузки: " + savedFile.getName(), Toast.LENGTH_LONG).show();
+                            Toast.makeText(appContext, "Saved to Downloads: " + savedFile.getName(), Toast.LENGTH_LONG).show();
                         }
                     });
                     Log.i(TAG, "Blob saved to: " + savedFile.getAbsolutePath());
@@ -353,7 +376,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(appContext, "Ошибка сохранения файла: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(appContext, "Failed to save file: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                         }
                     });
                 }
@@ -399,7 +422,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(appContext, "Сохранено в Загрузки: " + savedFile.getName(), Toast.LENGTH_LONG).show();
+                            Toast.makeText(appContext, "Saved to Downloads: " + savedFile.getName(), Toast.LENGTH_LONG).show();
                         }
                     });
                     Log.i(TAG, "Staged blob saved to: " + savedFile.getAbsolutePath());
@@ -409,7 +432,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(appContext, "Ошибка сохранения файла: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(appContext, "Failed to save file: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                         }
                     });
                 } finally {
@@ -551,7 +574,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(activity, "Сохранено в Загрузки: " + savedFile.getName(), Toast.LENGTH_LONG).show();
+                            Toast.makeText(activity, "Saved to Downloads: " + savedFile.getName(), Toast.LENGTH_LONG).show();
                         }
                     });
                     Log.i(TAG, "Direct download saved: " + savedFile.getAbsolutePath());
@@ -560,7 +583,7 @@ public final class FileDownloader {
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(activity, "Ошибка скачивания: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(activity, "Download failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                         }
                     });
                 }

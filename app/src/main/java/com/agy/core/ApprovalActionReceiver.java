@@ -21,8 +21,6 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -32,12 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * Handles interactive notification action buttons (Approve / Deny / Deny w/ Comment
@@ -290,7 +283,7 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
                 public void run() {
                     try {
                         if (shouldLoopbackCallback) {
-                            postLoopbackCallback(callbackUrl, updated);
+                            postLoopbackCallback(appCtx, callbackUrl, updated);
                         }
                         if (shouldCancelCascade) {
                             postCancelCascadeInvocation(appCtx, updated.cascadeId);
@@ -615,7 +608,7 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
         try {
             JSONObject body = new JSONObject();
             body.put("cascadeId", cascadeId);
-            int code = postConnectRpc(endpoint, "CancelCascadeInvocation", body);
+            int code = postConnectRpc(context, endpoint, "CancelCascadeInvocation", body);
             Log.i(TAG, "CancelCascadeInvocation(" + cascadeId + ") HTTP " + code);
         } catch (Exception e) {
             Log.w(TAG, "CancelCascadeInvocation failed: " + e.getMessage());
@@ -646,14 +639,14 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
             JSONObject body = new JSONObject();
             body.put("cascadeId", record.cascadeId);
             body.put("interaction", interaction);
-            int code = postConnectRpc(endpoint, "HandleCascadeUserInteraction", body);
+            int code = postConnectRpc(context, endpoint, "HandleCascadeUserInteraction", body);
             Log.i(TAG, "HandleCascadeUserInteraction(" + record.cascadeId + ") HTTP " + code);
         } catch (Exception e) {
             Log.w(TAG, "HandleCascadeUserInteraction failed: " + e.getMessage());
         }
     }
 
-    private static int postConnectRpc(CoreEndpoint endpoint, String method, JSONObject payload) throws Exception {
+    private static int postConnectRpc(Context context, CoreEndpoint endpoint, String method, JSONObject payload) throws Exception {
         String targetUrl = endpoint.baseUrl + "/" + LANGUAGE_SERVER_SERVICE + "/" + method;
         if (!isLoopbackCallbackUrl(targetUrl)) {
             throw new IllegalArgumentException("non-loopback ConnectRPC URL refused");
@@ -663,7 +656,7 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
             URL url = new URL(targetUrl);
             conn = (HttpURLConnection) url.openConnection();
             if (conn instanceof HttpsURLConnection) {
-                configureLoopbackTls((HttpsURLConnection) conn);
+                CoreReadyProbe.configurePinnedLoopbackTls(context, (HttpsURLConnection) conn);
             }
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(4000);
@@ -687,13 +680,13 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void postLoopbackCallback(String callbackUrl, ApprovalRecord record) {
+    private static void postLoopbackCallback(Context context, String callbackUrl, ApprovalRecord record) {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(callbackUrl);
             conn = (HttpURLConnection) url.openConnection();
             if (conn instanceof HttpsURLConnection) {
-                configureLoopbackTls((HttpsURLConnection) conn);
+                CoreReadyProbe.configurePinnedLoopbackTls(context, (HttpsURLConnection) conn);
             }
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(3000);
@@ -717,37 +710,6 @@ public final class ApprovalActionReceiver extends BroadcastReceiver {
             if (conn != null) {
                 conn.disconnect();
             }
-        }
-    }
-
-    private static void configureLoopbackTls(HttpsURLConnection conn) {
-        try {
-            TrustManager[] trustLoopback = new TrustManager[]{
-                new X509TrustManager() {
-                    @Override
-                    public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                    }
-
-                    @Override
-                    public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                    }
-
-                    @Override
-                    public X509Certificate[] getAcceptedIssuers() {
-                        return new X509Certificate[0];
-                    }
-                }
-            };
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(null, trustLoopback, new SecureRandom());
-            conn.setSSLSocketFactory(sc.getSocketFactory());
-            conn.setHostnameVerifier(new HostnameVerifier() {
-                @Override
-                public boolean verify(String hostname, SSLSession session) {
-                    return "127.0.0.1".equals(hostname) || "localhost".equalsIgnoreCase(hostname);
-                }
-            });
-        } catch (Exception ignored) {
         }
     }
 
