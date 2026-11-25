@@ -266,12 +266,25 @@ function registerRow(row) {
 }
 
 /**
- * patches/touch_model_menu/scan.js - debounced DOM scan for effort groups.
+ * patches/touch_model_menu/scan.js - debounced DOM scan for effort groups,
+ * pausing root observer when the model selector panel is closed.
  */
+var SCAN_DEBOUNCE_MS = 80;
 
-// Trailing debounce: DOM mutates constantly while a reply streams. A rAF scan
-// would run at screen refresh (60-120 Hz); coalesce to one pass.
-var SCAN_DEBOUNCE_MS = 180;
+function isPanelOpen() {
+  try {
+    return !!(document.querySelector(CONFIG.panel) || document.querySelector(CONFIG.effortGroup));
+  } catch (_) {
+    return false;
+  }
+}
+
+function disconnectObserver() {
+  if (state.observer && state.observingRoot) {
+    try { state.observer.disconnect(); } catch (_) {}
+    state.observingRoot = false;
+  }
+}
 
 function scan() {
   var groups = [];
@@ -286,18 +299,39 @@ function scan() {
     var row = (group.closest && group.closest(CONFIG.menuItemRole)) || group.parentElement || group;
     registerRow(row);
   }
+  if (!isPanelOpen()) {
+    disconnectObserver();
+  }
 }
 
 function scheduleScan() {
-  if (state.scanTimer) return;
+  if (state.scanTimer) clearTimeout(state.scanTimer);
   state.scanTimer = setTimeout(function () {
     state.scanTimer = 0;
     scan();
   }, SCAN_DEBOUNCE_MS);
 }
 
+function armPanelObserver() {
+  var root = document.querySelector(CONFIG.root) || document.body || document.documentElement;
+  if (window.MutationObserver && root) {
+    if (!state.observer) {
+      state.observer = new MutationObserver(scheduleScan);
+    }
+    if (!state.observingRoot) {
+      try {
+        state.observer.observe(root, { childList: true, subtree: true });
+        state.observingRoot = true;
+      } catch (_) {}
+    }
+  }
+  setTimeout(scan, 16);
+  setTimeout(scan, 80);
+  setTimeout(scan, 200);
+}
+
 /**
- * patches/touch_model_menu/install.js - arm the observer on touch devices.
+ * patches/touch_model_menu/install.js - initial scan + lazy observer activation when model menu opens.
  */
 function install() {
   if (state.installed) return;
@@ -309,12 +343,27 @@ function install() {
     return;
   }
 
+  if (window.MutationObserver && !state.observer) {
+    state.observer = new MutationObserver(scheduleScan);
+  }
+
   scan();
 
-  var root = document.querySelector(CONFIG.root) || document.body || document.documentElement;
-  if (window.MutationObserver && root) {
-    state.observer = new MutationObserver(scheduleScan);
-    state.observer.observe(root, { childList: true, subtree: true });
+  var onInteract = function (ev) {
+    var t = ev && ev.target;
+    if (!t || !t.closest) return;
+    if (t.closest(CONFIG.trigger) || t.closest(CONFIG.panel) || isPanelOpen()) {
+      armPanelObserver();
+    }
+  };
+
+  if (document && document.addEventListener) {
+    document.addEventListener('pointerdown', onInteract, { capture: true, passive: true });
+    document.addEventListener('click', onInteract, { capture: true, passive: true });
+  }
+
+  if (isPanelOpen()) {
+    armPanelObserver();
   }
   console.log('[agTouchModelMenu] active (rows=' + state.rows + ').');
 }

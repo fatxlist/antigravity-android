@@ -11,9 +11,11 @@ var api = {
   setEndpoint: setEndpoint,
   baseOrigin: baseOrigin,
   syncCsrf: syncCsrf,
-  parseEndpointSpec: parseEndpointSpec
+  parseEndpointSpec: parseEndpointSpec,
+  triggerStreamRecovery: typeof triggerStreamRecovery === 'function' ? triggerStreamRecovery : function () {},
+  getActiveStreamCount: function () { return typeof activeStreamClosers !== 'undefined' ? activeStreamClosers.size : 0; }
 };
 
 window.__agBridgeCore = api;
 
-try { console.log('[AGY bridge.core] ready (endpoints: ' + Object.keys(ENDPOINTS).length + ')'); } catch (e) {}
+try { console.log('[AGY bridge.core] v' + VERSION + ' ready (loopback stream recovery + online shim active)'); } catch (e) {}

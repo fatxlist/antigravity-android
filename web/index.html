@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <title>Jetski Web</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, interactive-widget=resizes-content" />
+    <meta name="color-scheme" content="light dark" />
     <!-- Preconnect secondary CDNs for dynamic UI icons (Drive, Docs, Colab) -->
     <link rel="preconnect" href="https://www.gstatic.com" />
     <link rel="preconnect" href="https://ssl.gstatic.com" />
@@ -51,6 +52,15 @@
         overscroll-behavior: none;
         -webkit-font-smoothing: antialiased;
         overflow: hidden;
+      }
+      p, li {
+        unicode-bidi: plaintext;
+        text-align: start;
+      }
+      pre, code {
+        unicode-bidi: isolate;
+        direction: ltr;
+        text-align: left;
       }
       #root {
         width: 100%;

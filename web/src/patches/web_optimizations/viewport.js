@@ -15,3 +15,5 @@ function installViewport(global, doc) {
     }
   } catch (e) {}
 }
+
+installViewport(global, doc);

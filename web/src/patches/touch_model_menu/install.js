@@ -1,5 +1,5 @@
 /**
- * patches/touch_model_menu/install.js - arm the observer on touch devices.
+ * patches/touch_model_menu/install.js - initial scan + lazy observer activation when model menu opens.
  */
 function install() {
   if (state.installed) return;
@@ -11,12 +11,27 @@ function install() {
     return;
   }
 
+  if (window.MutationObserver && !state.observer) {
+    state.observer = new MutationObserver(scheduleScan);
+  }
+
   scan();
 
-  var root = document.querySelector(CONFIG.root) || document.body || document.documentElement;
-  if (window.MutationObserver && root) {
-    state.observer = new MutationObserver(scheduleScan);
-    state.observer.observe(root, { childList: true, subtree: true });
+  var onInteract = function (ev) {
+    var t = ev && ev.target;
+    if (!t || !t.closest) return;
+    if (t.closest(CONFIG.trigger) || t.closest(CONFIG.panel) || isPanelOpen()) {
+      armPanelObserver();
+    }
+  };
+
+  if (document && document.addEventListener) {
+    document.addEventListener('pointerdown', onInteract, { capture: true, passive: true });
+    document.addEventListener('click', onInteract, { capture: true, passive: true });
+  }
+
+  if (isPanelOpen()) {
+    armPanelObserver();
   }
   console.log('[agTouchModelMenu] active (rows=' + state.rows + ').');
 }

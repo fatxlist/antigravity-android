@@ -1,20 +1,10 @@
 /**
  * core/fetch-rewrite.js - file:// WebView -> core origin fetch rewrite.
  *
- * The WebView loads from file:///android_asset/web/, so main.js builds its
- * transport from window.location.origin ("file://") and the Connect/grpc-web
- * transport then fetches e.g.
- *   file://exa.language_server_pb.languageserverservice/Method
- * which the WebView rejects: URL scheme "file" is not supported.
- *
- * Rewrite file:// or relative ConnectRPC URLs onto the core origin, preserving
- * method/headers/body and attaching the CSRF token. Idempotent and a no-op for
- * non-RPC / already-absolute http(s) URLs.
- *
- * The original periodic HEAD ping is not ported (it referenced an undefined
- * helper; see docs/DEADCODE.md).
+ * Combines ConnectRPC file:// origin rewriting, cold-boot /voice/health retries,
+ * non-idempotent POST replay safety (PR #24), and streaming resume recovery (PR #34).
  */
-var RPC_MARKERS = ['exa.language_server_pb.', 'exa.host_bridge_pb.', '/exa.'];
+var RPC_MARKERS = ['exa.language_server_pb.', 'exa.host_bridge_pb.', '/exa.', '/jetski.'];
 
 function isVoiceHealthUrl(url) {
   if (!url) return false;
@@ -47,16 +37,39 @@ function rpcPathFrom(url) {
   return s.slice(best).replace(/^\/+/, '') || null;
 }
 
+function isRetrySafeCall(url, opts, isStream) {
+  var method = String((opts && opts.method) || (url && typeof url === 'object' && url.method) || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+  if (isStream) return true;
+  // Read-only ConnectRPC queries (all sent over HTTP POST) that are safe to retry on cold-boot socket errors.
+  var u = String((url && typeof url === 'object' && url.url) || url || '');
+  return /\/(?:Get|List|Check|Heartbeat|Stream|Subscribe)[A-Za-z0-9_]*(?:[?#]|$)/.test(u);
+}
+
+function isAbortedError(err, opts) {
+  if (opts && opts.signal && opts.signal.aborted) return true;
+  if (!err) return false;
+  return err.name === 'AbortError' || (typeof err.message === 'string' && err.message.indexOf('aborted') !== -1);
+}
+
 function installFetchRewrite() {
   if (global.__AG_FETCH_REWRITE__ || typeof global.fetch !== 'function') return;
   var origFetch = global.fetch.bind(global);
+  var schedule = typeof origSetTimeout === 'function' ? origSetTimeout : setTimeout;
 
-  function fetchWithStartupRetry(u, opts, retries) {
-    return origFetch(u, opts).catch(function (err) {
-      if (retries > 0) {
+  function fetchWithStartupRetry(u, opts, retries, isStream) {
+    var attempts = isRetrySafeCall(u, opts, isStream) ? retries : 0;
+    var doCall = (isStream && typeof wrapStreamingFetch === 'function')
+      ? function () { return wrapStreamingFetch(origFetch, u, opts); }
+      : function () { return origFetch(u, opts); };
+    return doCall().catch(function (err) {
+      if (isAbortedError(err, opts)) {
+        throw err;
+      }
+      if (attempts > 0) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
-            resolve(fetchWithStartupRetry(u, opts, retries - 1));
+          schedule(function () {
+            resolve(fetchWithStartupRetry(u, opts, attempts - 1, isStream));
           }, 120);
         });
       }
@@ -70,16 +83,19 @@ function installFetchRewrite() {
     return origFetch(u, opts).then(function (resp) {
       if (retries > 0 && resp && (resp.status === 502 || resp.status === 503 || resp.status === 504)) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
+          schedule(function () {
             resolve(fetchVoiceHealthWithRetry(u, opts, retries - 1));
           }, 300);
         });
       }
       return resp;
     }, function (err) {
+      if (isAbortedError(err, opts)) {
+        throw err;
+      }
       if (retries > 0) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
+          schedule(function () {
             resolve(fetchVoiceHealthWithRetry(u, opts, retries - 1));
           }, 300);
         });
@@ -102,6 +118,7 @@ function installFetchRewrite() {
             var reqMethod = resource.method || (init && init.method) || 'POST';
             var reqHeaders = new Headers(resource.headers || (init && init.headers) || {});
             ensureCsrf(reqHeaders);
+            var reqSignal = (init && init.signal) || resource.signal;
 
             var bodyPromise;
             if (init && init.body !== undefined) {
@@ -121,11 +138,16 @@ function installFetchRewrite() {
                 method: reqMethod,
                 headers: reqHeaders,
                 body: bodyData,
-                credentials: 'omit'
+                credentials: 'omit',
+                signal: reqSignal
               };
-              return fetchWithStartupRetry(targetUrl, nextOpts, 30);
+              var streamCall = typeof isStreamingRpc === 'function' && isStreamingRpc(rpath);
+              return fetchWithStartupRetry(targetUrl, nextOpts, 30, streamCall);
             });
           } catch (e) { warn('fetch rewrite (Request)', e); }
+        }
+        if (typeof isLoopbackRpcUrl === 'function' && typeof wrapStreamingFetch === 'function' && isLoopbackRpcUrl(resource.url)) {
+          return wrapStreamingFetch(origFetch, resource, init);
         }
         return origFetch(resource, init);
       }
@@ -151,7 +173,11 @@ function installFetchRewrite() {
           }
           next.headers = headers;
 
-          return fetchWithStartupRetry(url, next, 30);
+          var strStreamCall = typeof isStreamingRpc === 'function' && isStreamingRpc(path);
+          return fetchWithStartupRetry(url, next, 30, strStreamCall);
+        }
+        if (typeof isLoopbackRpcUrl === 'function' && typeof wrapStreamingFetch === 'function' && isLoopbackRpcUrl(resource)) {
+          return wrapStreamingFetch(origFetch, resource, init);
         }
       }
     } catch (e) { warn('fetch rewrite', e); }
