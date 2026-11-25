@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # build.sh - Convenient root wrapper for Antigravity APK builder.
 # Usage:
-#   bash build.sh                 # Build standard release edition (dist/antigravity.apk)
-#   bash build.sh --region-bypass # Build release edition with region bypass (dist/antigravity-region-bypass.apk)
-#   bash build.sh --fast          # Fast uncompressed assets iteration
+#   bash build.sh                    # Build release edition (dist/antigravity.apk; requires AGY_RELEASE_* signing env)
+#   bash build.sh --dev              # Build debuggable dev edition (dist/antigravity-dev.apk)
+#   bash build.sh --allow-debug-sign # Build release package signed with debug keystore for local testing
+#   bash build.sh --fast             # Fast uncompressed assets iteration
 
 set -euo pipefail
 

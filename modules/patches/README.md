@@ -18,11 +18,11 @@ modules/patches/
 │   ├── reporter.py          # Формирование JSON-отчетов по выполненным патчам
 │   └── patch_context.py     # Модель контекста выполнения
 ├── groups/                  # Функциональные группы патчей
-│   ├── gates/               # Обход CLI gate и Enterprise Auth
 │   ├── syscalls/            # Замена seccomp-блокируемых faccessat2/fchmodat2
 │   ├── sigill/              # Защита обработчика SIGILL (для liblse_compat)
 │   ├── resolv/              # Редирект /etc/resolv.conf на относительный путь
-│   └── failfast/            # Подавление проверок CPU ARMv8.0-A и preinit atomic
+│   ├── failfast/            # Подавление проверок CPU ARMv8.0-A и preinit atomic
+│   └── pty_shell/           # Retarget PTY shell path (/bin/bash -> /bin///sh)
 └── tests/                   # Модульные и интеграционные тесты
     ├── test_byte_replacer.py
     ├── test_elf_scanner.py
@@ -37,8 +37,6 @@ modules/patches/
 
 | Группа | Модуль | Цель и сигнатура | Действие |
 |---|---|---|---|
-| **gates** | `cli_gate` | `ldrb w1, [x0,#8]` в проверке CLI gate | Заменяется на `mov w1, #1` (`21 00 80 52`) |
-| **gates** | `enterprise_auth` | `EnterpriseAuthValidator.Validate` | Принудительная установка флага валидности |
 | **syscalls** | `faccessat` | `syscall.faccessat2` (sys_439: `0xd28036e0`) | Ретаргетинг на `faccessat` (sys_48: `0xd2800600`) |
 | **syscalls** | `fchmodat` | `syscall.fchmodat2` (sys_452: `0xd2803880`) | Ретаргетинг на `fchmodat` (sys_53: `0xd28006a0`) |
 | **sigill** | `sigill_handler` | Вызов `rt_sigaction` в рантайме Go | Игнорирование сигнала `SIGILL` (4) для сохранения обработчика `liblse_compat.so` |

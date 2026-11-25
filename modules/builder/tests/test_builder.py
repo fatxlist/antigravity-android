@@ -131,6 +131,21 @@ class TestBuilder(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(build_dir, "class_files.txt")))
         self.assertTrue(os.path.isfile(os.path.join(dex_dir, "classes.dex")))
 
+    def test_05_sign_fail_closed(self):
+        import subprocess
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("AGY_RELEASE_") and k not in ("DEV_MODE", "ALLOW_DEBUG_SIGN", "AGY_SIGN_KEY_PASS", "AGY_SIGN_STORE_PASS")}
+        dummy_aligned = os.path.join(self.tmp_dir, "aligned.apk")
+        dummy_out = os.path.join(self.tmp_dir, "out.apk")
+        with open(dummy_aligned, "wb") as f:
+            f.write(b"PK")
+        res = subprocess.run(
+            ["bash", os.path.join(BUILDER_DIR, "08_sign.sh"), dummy_aligned, dummy_out],
+            capture_output=True, text=True, env=env
+        )
+        self.assertNotEqual(res.returncode, 0, "08_sign.sh must fail closed without release signing credentials")
+        self.assertIn("Refusing to sign release APK", res.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

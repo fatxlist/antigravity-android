@@ -21,9 +21,7 @@ export LC_ALL=C.UTF-8
 
 export FAST_BUILD=0
 export DEV_MODE=0
-export NO_BYPASS="${NO_BYPASS:-1}"
-if [ "${REGION_BYPASS:-0}" = "1" ] || [ "${BYPASS:-0}" = "1" ]; then export NO_BYPASS=0; fi
-if [ "${SKIP_GATES:-0}" = "1" ]; then export NO_BYPASS=1; fi
+export ALLOW_DEBUG_SIGN="${ALLOW_DEBUG_SIGN:-0}"
 export CUSTOM_PREFIX=""
 export CUSTOM_OUT=""
 
@@ -37,12 +35,8 @@ while [ $# -gt 0 ]; do
             export DEV_MODE=1
             shift
             ;;
-        --bypass|--region-bypass)
-            export NO_BYPASS=0
-            shift
-            ;;
-        --no-bypass|--nobypass|--no-region-bypass|--skip-gates|--no-gates|--standard)
-            export NO_BYPASS=1
+        --allow-debug-sign)
+            export ALLOW_DEBUG_SIGN=1
             shift
             ;;
         --prefix)
@@ -66,22 +60,45 @@ if [ -n "$CUSTOM_OUT" ]; then
     OUT_APK="$CUSTOM_OUT"
     EDITION_LABEL="CUSTOM OUTPUT ($OUT_APK)"
 elif [ "$DEV_MODE" = "1" ]; then
-    if [ "$NO_BYPASS" = "0" ]; then
-        OUT_APK="$DIST_DIR/${BASE_PREFIX}-dev-region-bypass.apk"
-        EDITION_LABEL="DEV EDITION WITH REGION BYPASS (com.agy.dev, port 45158, debuggable)"
-    else
-        OUT_APK="$DIST_DIR/${BASE_PREFIX}-dev.apk"
-        EDITION_LABEL="DEV EDITION STANDARD (com.agy.dev, port 45158, debuggable, standard gates)"
+    OUT_APK="$DIST_DIR/${BASE_PREFIX}-dev.apk"
+    EDITION_LABEL="DEV EDITION (com.agy.dev, port 45158, debuggable)"
+else
+    OUT_APK="$DIST_DIR/${BASE_PREFIX}.apk"
+    EDITION_LABEL="RELEASE EDITION (com.agy, port 45157)"
+fi
+
+if [ -f "$PROJECT_ROOT/config/tools.env" ]; then
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/config/tools.env"
+fi
+
+if [ "$DEV_MODE" = "1" ] || [ "$ALLOW_DEBUG_SIGN" = "1" ]; then
+    SIGN_KEYSTORE="${DEV_KEYSTORE:-$TOOLS_DIR/debug.keystore}"
+    SIGN_KEY_ALIAS="${DEV_KEY_ALIAS:-androiddebugkey}"
+    SIGN_KEY_PASS="${DEV_KEY_PASS:-android}"
+    SIGN_STORE_PASS="${DEV_STORE_PASS:-android}"
+    if [ "$DEV_MODE" != "1" ]; then
+        echo "[WARNING] Using debug keystore for non-dev build (--allow-debug-sign). Do not distribute as production release." >&2
     fi
 else
-    if [ "$NO_BYPASS" = "0" ]; then
-        OUT_APK="$DIST_DIR/${BASE_PREFIX}-region-bypass.apk"
-        EDITION_LABEL="RELEASE EDITION WITH REGION BYPASS (com.agy, port 45157, with account eligibility bypass)"
-    else
-        OUT_APK="$DIST_DIR/${BASE_PREFIX}.apk"
-        EDITION_LABEL="RELEASE EDITION STANDARD (com.agy, port 45157, original gates)"
+    SIGN_KEYSTORE="${KEYSTORE:-}"
+    SIGN_KEY_ALIAS="${KEY_ALIAS:-}"
+    SIGN_KEY_PASS="${KEY_PASS:-}"
+    SIGN_STORE_PASS="${STORE_PASS:-}"
+    if [ -z "$SIGN_KEYSTORE" ] || [ -z "$SIGN_KEY_ALIAS" ] || [ -z "$SIGN_KEY_PASS" ] || [ -z "$SIGN_STORE_PASS" ]; then
+        echo "[ERROR] Missing release signing configuration." >&2
+        echo "  Set AGY_RELEASE_KEYSTORE, AGY_RELEASE_KEY_ALIAS, AGY_RELEASE_KEY_PASS, and AGY_RELEASE_STORE_PASS," >&2
+        echo "  or pass --dev / --allow-debug-sign for local debug signing." >&2
+        exit 1
     fi
 fi
+
+if [ ! -f "$SIGN_KEYSTORE" ]; then
+    echo "[ERROR] Signing keystore not found: $SIGN_KEYSTORE" >&2
+    exit 1
+fi
+export AGY_SIGN_KEY_PASS="$SIGN_KEY_PASS"
+export AGY_SIGN_STORE_PASS="$SIGN_STORE_PASS"
 
 
 echo "============================================================"
@@ -126,13 +143,7 @@ bash "$SCRIPT_DIR/04_dex.sh" "$BUILD_DIR/dex" "$BUILD_DIR/obj" "$TOOLS_DIR/r8.ja
 
 # Phase 05: Stage Assets
 echo -e "\n>>> [5/8] Staging Runtime and Web Assets..."
-STAGE_FLAGS=()
-if [ "$NO_BYPASS" = "1" ]; then
-    STAGE_FLAGS+=(--no-bypass)
-else
-    STAGE_FLAGS+=(--region-bypass)
-fi
-python3 "$SCRIPT_DIR/05_stage_assets.py" "$BUILD_DIR/staging" "${STAGE_FLAGS[@]}"
+python3 "$SCRIPT_DIR/05_stage_assets.py" "$BUILD_DIR/staging"
 
 # Phase 06: Package Unaligned APK
 echo -e "\n>>> [6/8] Packaging Unaligned APK..."
@@ -144,7 +155,7 @@ python3 "$SCRIPT_DIR/align.py" "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.ap
 
 # Phase 08: Sign and Verify APK
 echo -e "\n>>> [8/8] Signing and Verifying APK..."
-bash "$SCRIPT_DIR/08_sign.sh" "$BUILD_DIR/aligned.apk" "$OUT_APK" "$TOOLS_DIR/debug.keystore"
+bash "$SCRIPT_DIR/08_sign.sh" "$BUILD_DIR/aligned.apk" "$OUT_APK" "$SIGN_KEYSTORE" "$SIGN_KEY_ALIAS"
 bash "$SCRIPT_DIR/09_verify.sh" "$OUT_APK"
 
 echo "============================================================"

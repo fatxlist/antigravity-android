@@ -17,8 +17,7 @@ sys.path.insert(0, os.path.join(MODULES_ROOT, "core", "unpack"))
 import pipeline
 import extractor
 
-EXPECTED_FINAL_SHA = "87a06a695653a4b5a4d7faf385df02740620afb808e1b8a341ba48dc6b77dff4"
-EXPECTED_NO_GATES_SHA = "cdbad9f7855ae6d9bb675c42aa34af82f662c5a5cab98ef0d514eb1061690cad"
+EXPECTED_FINAL_SHA = "cdbad9f7855ae6d9bb675c42aa34af82f662c5a5cab98ef0d514eb1061690cad"
 
 class TestFullPipeline(unittest.TestCase):
     def setUp(self):
@@ -58,16 +57,6 @@ class TestFullPipeline(unittest.TestCase):
         # With all modules including crash_suppressor present, allow_missing=False succeeds
         ok = pipeline.run_pipeline(self.staged_bin, dry_run=True, allow_missing=False)
         self.assertTrue(ok)
-
-    def test_04_pipeline_skip_gates(self):
-        # When skip_gates=True, cli_gate and enterprise_auth are skipped
-        target = os.path.join(self.tmp_dir, "ls_no_gates")
-        extractor.extract_core(self.archive_path, target)
-        ok = pipeline.run_pipeline(target, skip_gates=True, allow_missing=False)
-        self.assertTrue(ok)
-        with open(target, "rb") as f:
-            sha = pipeline.sha256_bytes(f.read())
-        self.assertEqual(sha, EXPECTED_NO_GATES_SHA)
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,15 +16,14 @@ if MODULES_DIR not in sys.path:
 from runner import prepare_runtime
 
 
-def stage_assets(staging_dir, no_bypass=False):
-    no_bypass = no_bypass or (os.environ.get("NO_BYPASS") == "1") or (os.environ.get("SKIP_GATES") == "1")
+def stage_assets(staging_dir):
     assets_dir = os.path.join(staging_dir, "assets")
     runtime_dst = os.path.join(assets_dir, "runtime")
     web_dst = os.path.join(assets_dir, "web")
     os.makedirs(assets_dir, exist_ok=True)
 
-    print(f"[*] Staging fully patched runtime assets (no_bypass={no_bypass}) -> {runtime_dst}...")
-    ok = prepare_runtime.prepare(dest_runtime_dir=runtime_dst, no_bypass=no_bypass)
+    print(f"[*] Staging fully patched runtime assets -> {runtime_dst}...")
+    ok = prepare_runtime.prepare(dest_runtime_dir=runtime_dst)
     if not ok:
         raise RuntimeError("Failed to prepare and stage runtime assets!")
 
@@ -68,15 +67,10 @@ def stage_assets(staging_dir, no_bypass=False):
 
 def main():
     staging_dir = os.path.join(PROJECT_ROOT, "build", "staging")
-    no_bypass = (os.environ.get("NO_BYPASS") == "1") or (os.environ.get("SKIP_GATES") == "1")
     for arg in sys.argv[1:]:
-        if arg in ("--no-bypass", "--nobypass", "--skip-gates", "--no-gates", "--standard"):
-            no_bypass = True
-        elif arg in ("--bypass", "--region-bypass", "--with-bypass"):
-            no_bypass = False
-        elif not arg.startswith("-"):
+        if not arg.startswith("-"):
             staging_dir = arg
-    stage_assets(staging_dir, no_bypass=no_bypass)
+    stage_assets(staging_dir)
 
 
 if __name__ == "__main__":

@@ -8,14 +8,6 @@
   },
   "groups": [
     {
-      "name": "gates",
-      "description": "Eligibility and Enterprise Auth gates bypass",
-      "expected": {
-        "cli": 2,
-        "manager": 1
-      }
-    },
-    {
       "name": "syscalls",
       "description": "Android seccomp faccessat2/fchmodat2 retargeting",
       "expected": {
