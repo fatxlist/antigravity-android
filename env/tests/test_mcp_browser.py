@@ -27,6 +27,7 @@ TINY_PNG = base64.b64decode(
 
 class _MockBrowserGatewayHandler(BaseHTTPRequestHandler):
     recorded = []
+    expected_token = ""
     screenshot_path = ""
     get_text_calls = 0
 
@@ -39,6 +40,10 @@ class _MockBrowserGatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self):
+        if self.__class__.expected_token:
+            if self.headers.get("X-Agy-Gateway-Token", "") != self.__class__.expected_token:
+                self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+                return
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8", errors="replace") if length else "{}"
         req = json.loads(body)
@@ -128,6 +133,7 @@ class TestMcpBrowserServer(unittest.TestCase):
         os.makedirs(os.path.join(self.prefix_dir, "bin"), exist_ok=True)
 
         _MockBrowserGatewayHandler.recorded = []
+        _MockBrowserGatewayHandler.expected_token = "test-browser-gw-token-0123456789abcdef"
         _MockBrowserGatewayHandler.get_text_calls = 0
         _MockBrowserGatewayHandler.screenshot_path = os.path.join(self.tmp_dir, "shot.png")
 
@@ -138,6 +144,8 @@ class TestMcpBrowserServer(unittest.TestCase):
 
         with open(os.path.join(self.home_dir, "logs", "gateway.port"), "w", encoding="utf-8") as f:
             f.write(f"{self.port}\n")
+        with open(os.path.join(self.home_dir, "logs", "gateway.token"), "w", encoding="utf-8") as f:
+            f.write(f"{_MockBrowserGatewayHandler.expected_token}\n")
 
         env = os.environ.copy()
         env["HOME"] = self.home_dir

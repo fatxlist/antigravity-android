@@ -50,9 +50,9 @@ public final class OAuthTokenStore {
 
     /**
      * True when {@code text} is missing a token or carries an explicit JSON
-     * {@code null} for it (the core's not-logged-in placeholder).
+     * {@code null} or blank string for it (the core's not-logged-in placeholder).
      */
-    private static boolean isNullOrBlankToken(String text) {
+    public static boolean isNullOrBlankToken(String text) {
         if (text == null) {
             return true;
         }
@@ -62,16 +62,16 @@ public final class OAuthTokenStore {
         }
         int at = t.indexOf("\"token\"");
         if (at < 0) {
-            return false;
+            return true;
         }
         int colon = t.indexOf(':', at);
         if (colon < 0) {
-            return false;
+            return true;
         }
         int i = colon + 1;
         while (i < t.length() && Character.isWhitespace(t.charAt(i))) {
             i++;
         }
-        return t.startsWith("null", i);
+        return t.startsWith("null", i) || t.startsWith("\"\"", i);
     }
 }

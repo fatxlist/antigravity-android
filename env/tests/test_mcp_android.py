@@ -25,9 +25,20 @@ DAEMON_SCRIPT = os.path.join(ENV_DIR, "overlay", "bin", "agy-daemon")
 
 class _MockGatewayHandler(BaseHTTPRequestHandler):
     recorded = []
+    expected_token = ""
     clipboard_value = "initial clip"
     approval_polls = {}
     voice_state = {"active": False, "muted": False, "status_text": ""}
+
+    def _check_auth(self):
+        expected = self.__class__.expected_token
+        if not expected:
+            return True
+        provided = self.headers.get("X-Agy-Gateway-Token", "")
+        if provided != expected:
+            self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+            return False
+        return True
 
     def _send_json(self, obj, status=200):
         raw = json.dumps(obj).encode("utf-8")
@@ -38,18 +49,26 @@ class _MockGatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
+        if not self._check_auth():
+            return
         if self.path.startswith("/gateway/status"):
             self._send_json({"ok": True, "status": "online"})
             return
         self._send_json({"ok": False, "error": "not found"}, status=404)
 
     def do_POST(self):
+        if not self._check_auth():
+            return
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8", errors="replace") if length else "{}"
         req = json.loads(body)
         cmd = req.get("command", "")
         payload = req.get("payload") or {}
-        self.__class__.recorded.append({"command": cmd, "payload": payload})
+        self.__class__.recorded.append({
+            "command": cmd,
+            "payload": payload,
+            "token": self.headers.get("X-Agy-Gateway-Token", ""),
+        })
 
         if cmd == "system_info":
             self._send_json({
@@ -170,6 +189,7 @@ class TestMcpAndroidServer(unittest.TestCase):
         os.makedirs(os.path.join(self.prefix_dir, "bin"), exist_ok=True)
 
         _MockGatewayHandler.recorded = []
+        _MockGatewayHandler.expected_token = "test-gw-token-abcdef0123456789abcdef"
         _MockGatewayHandler.clipboard_value = "initial clip"
         _MockGatewayHandler.approval_polls = {}
         self.server = HTTPServer(("127.0.0.1", 0), _MockGatewayHandler)
@@ -177,9 +197,11 @@ class TestMcpAndroidServer(unittest.TestCase):
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
 
-        # Write HOME/logs/gateway.port to test automatic port discovery
+        # Write HOME/logs/gateway.port and gateway.token to test automatic discovery & auth
         with open(os.path.join(self.home_dir, "logs", "gateway.port"), "w", encoding="utf-8") as f:
             f.write(f"{self.port}\n")
+        with open(os.path.join(self.home_dir, "logs", "gateway.token"), "w", encoding="utf-8") as f:
+            f.write(f"{_MockGatewayHandler.expected_token}\n")
 
         # Create a small mock rish executable (cross-platform .cmd on Windows, sh on POSIX)
         if os.name == "nt":

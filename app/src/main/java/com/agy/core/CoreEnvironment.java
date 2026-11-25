@@ -38,13 +38,10 @@ public final class CoreEnvironment {
                 + ":" + prefixBin.getAbsolutePath()
                 + (inheritedPath == null || inheritedPath.isEmpty() ? "" : ":" + inheritedPath));
         // The core's PTY spawner uses $SHELL (or falls back to /bin/bash, which
-        // does not exist on Android). Prefer the prefix bash, then the bridge in
-        // runtime/bin, then Android's own sh.
-        File prefixBash = new File(prefix, com.agy.install.EnvPaths.BASH_REL);
+        // does not exist on Android). Prefer the runtime/bin/bash bridge (which sets
+        // Bionic LD_LIBRARY_PATH cleanly), falling back to Android's /system/bin/sh.
         File runtimeBash = new File(bin, "bash");
-        if (prefixBash.isFile() && prefixBash.canExecute()) {
-            env.put("SHELL", prefixBash.getAbsolutePath());
-        } else if (runtimeBash.isFile() && runtimeBash.canExecute()) {
+        if (runtimeBash.isFile() && runtimeBash.canExecute()) {
             env.put("SHELL", runtimeBash.getAbsolutePath());
         } else {
             env.put("SHELL", "/system/bin/sh");
@@ -77,6 +74,7 @@ public final class CoreEnvironment {
         env.put("XDG_CONFIG_HOME", new File(files, ".config").getAbsolutePath());
         env.put("PREFIX", prefix.getAbsolutePath());
         env.put("AGY_GATEWAY_PORT", String.valueOf(com.agy.gateway.SystemGatewayServer.getActivePort()));
+        env.put("AGY_GATEWAY_TOKEN_FILE", new File(files, "logs/gateway.token").getAbsolutePath());
         env.put("AGY_CORE_STATE_FILE", new File(files, CoreProcessSupervisor.CORE_STATE_REL_PATH).getAbsolutePath());
         // The glibc loader resolves libraries via --library-path; keep bionic's out of the way.
         env.remove("LD_LIBRARY_PATH");

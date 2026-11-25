@@ -60,8 +60,10 @@ If Shizuku reports `Server is not running`, tell the user to start the Shizuku s
 If calling from a shell script when MCP is not in scope:
 ```bash
 GW_PORT="$(cat "$HOME/logs/gateway.port" 2>/dev/null || echo 45160)"
-curl -sS "http://127.0.0.1:${GW_PORT}/gateway/status"
+GW_TOKEN="$(cat "$HOME/logs/gateway.token" 2>/dev/null || true)"
+curl -sS -H "X-Agy-Gateway-Token: ${GW_TOKEN}" "http://127.0.0.1:${GW_PORT}/gateway/status"
 curl -sS -X POST "http://127.0.0.1:${GW_PORT}/gateway" \
   -H "Content-Type: application/json" \
+  -H "X-Agy-Gateway-Token: ${GW_TOKEN}" \
   -d '{"command":"system_info","payload":{}}'
 ```

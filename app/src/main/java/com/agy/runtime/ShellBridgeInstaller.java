@@ -35,7 +35,7 @@ public final class ShellBridgeInstaller {
     /** Records which prefix the bulk bridges were generated for. Bump when the
      *  bridge script format changes so a warm launch regenerates them once. */
     private static final String BRIDGE_MARKER = ".agy-bridges";
-    private static final int BRIDGE_FORMAT = 4;
+    private static final int BRIDGE_FORMAT = 5;
 
     private ShellBridgeInstaller() {
     }
@@ -349,12 +349,17 @@ public final class ShellBridgeInstaller {
         sb.append("    READ_PORT=$(tr -d '\\r\\n ' < \"$HOME_DIR/logs/gateway.port\" 2>/dev/null)\n");
         sb.append("    [ -n \"$READ_PORT\" ] && GW_PORT=\"$READ_PORT\"\n");
         sb.append("  fi\n");
+        sb.append("  GW_TOKEN=\"\"\n");
+        sb.append("  if [ -f \"$HOME_DIR/logs/gateway.token\" ]; then\n");
+        sb.append("    GW_TOKEN=$(tr -d '\\r\\n ' < \"$HOME_DIR/logs/gateway.token\" 2>/dev/null)\n");
+        sb.append("  fi\n");
         sb.append("  if [ -x \"$PREFIX/bin/curl\" ]; then\n");
         sb.append("    (\n");
         sb.append("      export LD_LIBRARY_PATH=\"$PREFIX/lib\"\n");
         sb.append("      unset LD_PRELOAD\n");
         sb.append("      \"$PREFIX/bin/curl\" -sS -m 2 -X POST \"http://127.0.0.1:$GW_PORT/gateway\" \\\n");
         sb.append("        -H \"Content-Type: application/json\" \\\n");
+        sb.append("        ${GW_TOKEN:+-H \"X-Agy-Gateway-Token: $GW_TOKEN\"} \\\n");
         sb.append("        -d \"{\\\"command\\\":\\\"notify\\\",\\\"payload\\\":{\\\"tag\\\":\\\"agy_node_bootstrap\\\",\\\"id\\\":4150,\\\"title\\\":\\\"$TITLE\\\",\\\"message\\\":\\\"$MSG\\\"}}\" \\\n");
         sb.append("        >/dev/null 2>&1 || true\n");
         sb.append("    )\n");

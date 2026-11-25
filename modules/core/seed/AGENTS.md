@@ -15,7 +15,7 @@
   - Linux Userspace Prefix (`$PREFIX`): `$HOME/usr`.
   - Binary Directory: `$PREFIX/bin`.
   - Runtime Internals: `$HOME/runtime/bin`.
-  - Core & Gateway State: `$HOME/logs/core.state.json` and `$HOME/logs/gateway.port`.
+  - Core & Gateway State: `$HOME/logs/core.state.json`, `$HOME/logs/gateway.port`, and `$HOME/logs/gateway.token`.
   - External / Shared Storage: `/storage/emulated/0` (Projects typically reside in `/storage/emulated/0/Documents/`).
   - AI State, Global MCP Config & Skills: `$HOME/.gemini/config/mcp_config.json`, `$HOME/.gemini/config/skills/`, `$HOME/.gemini/config/AGENTS.md`.
   - Conversation Brain & Artifacts: `$HOME/.gemini/antigravity-app/brain/<conversation-id>/`.

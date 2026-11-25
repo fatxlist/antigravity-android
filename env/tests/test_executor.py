@@ -11,6 +11,7 @@ Unit tests for env/overlay/lib/daemon/executor.py:
 
 import os
 import sys
+sys.dont_write_bytecode = True
 import json
 import shutil
 import tempfile
