@@ -68,6 +68,12 @@ class TestShims(unittest.TestCase):
         try:
             xdg_dest = os.path.join(tmp, "xdg-open")
             shutil.copyfile(self.system_xdg, xdg_dest)
+            if not os.path.exists("/system/bin/sh"):
+                with open(xdg_dest, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if content.startswith("#!/system/bin/sh"):
+                    with open(xdg_dest, "w", encoding="utf-8") as f:
+                        f.write("#!/bin/sh" + content[len("#!/system/bin/sh"):])
             os.chmod(xdg_dest, 0o755)
 
             chrome_dest = os.path.join(tmp, "chrome")
