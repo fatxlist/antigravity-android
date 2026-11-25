@@ -13,6 +13,8 @@ cache/
 *.bin
 *.idsig
 !modules/core/pristine/language_server.tar.gz
+env/bootstrap/bootstrap.tar.gz
+web/generated/main.js
 web.old_backup/
 env/dist/
 

@@ -338,16 +338,16 @@ public final class SystemGatewayServer {
         return resp;
     }
 
-    /** Extracts X-Agy-Gateway-Token or Authorization: Bearer token from lowercased HTTP headers. */
+    /** Extracts X-Agy-Gateway-Token or Authorization: Bearer token from HTTP headers (case-insensitive keys). */
     public static String extractTokenFromHeaders(Map<String, String> headers) {
         if (headers == null) {
             return null;
         }
-        String provided = headers.get(TOKEN_HEADER);
+        String provided = getHeaderIgnoreCase(headers, TOKEN_HEADER);
         if (provided != null && !provided.trim().isEmpty()) {
             return provided.trim();
         }
-        String auth = headers.get(AUTH_HEADER);
+        String auth = getHeaderIgnoreCase(headers, AUTH_HEADER);
         if (auth != null) {
             String prefix = "Bearer ";
             if (auth.regionMatches(true, 0, prefix, 0, prefix.length())) {
@@ -355,6 +355,20 @@ public final class SystemGatewayServer {
                 if (!bearer.isEmpty()) {
                     return bearer;
                 }
+            }
+        }
+        return null;
+    }
+
+    private static String getHeaderIgnoreCase(Map<String, String> headers, String lowerKey) {
+        String direct = headers.get(lowerKey);
+        if (direct != null) {
+            return direct;
+        }
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            String k = entry.getKey();
+            if (k != null && k.equalsIgnoreCase(lowerKey)) {
+                return entry.getValue();
             }
         }
         return null;
