@@ -1,16 +1,37 @@
-# Antigravity for Android v2.4.1
+# Antigravity for Android v2.5.0
 
 ## Спецификация пакетов релиза
 
 | Файл пакета | Идентификатор приложения | Порт рантайма | Описание |
 | :--- | :--- | :--- | :--- |
-| **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с оригинальными проверками Google (чистая версия без модификаций кода аутентификации). |
-| **`antigravity-region-bypass.apk`** | `com.agy` | 45157 | Редакция с обходом проверки учетных записей (позволяет авторизоваться под аккаунтами, блокируемыми со стороны Google; требует наличия сетевого туннеля/VPN). |
+| **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с нативным Bionic-рантаймом (чистая версия без модификаций кода аутентификации). |
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
+
+> [!NOTE]
+> Сборка `antigravity.apk` для релиза `v2.5.0` выполнена в GitHub Actions с флагом `--allow-debug-sign`, так как релизные секреты подписи `AGY_RELEASE_*` ещё не добавлены в GitHub Secrets репозитория.
 
 ---
 
-## Изменения и исправления (v2.4.1)
+## Изменения и исправления (v2.5.0)
+
+### 1. Полноэкранный режим Edge-to-Edge (API 24–36)
+* Добавлен нативный helper `EdgeToEdge` и обновлены `ActivityPainter`, версионированные стили `values-v27`..`values-v30` и темы системного сплэша (`SplashThemeDark` / `SplashThemeLight`): прозрачные status bar и navigation bar (на API 24–25 в светлой теме используется защитный скрим `LEGACY_LIGHT_SCRIM`), отключение системного контраста на API 29+, расширение под вырезы экрана (`shortEdges` / `always`) и корректное переключение полярности иконок.
+* Обработка `WindowInsets` (`systemBars | displayCutout | ime`) внедрена в `MainActivity`, `ExtraKeysBarView` (плавное продление фона панели доп. клавиш под жестовую панель при закрытой клавиатуре), `LocalPreviewDialog` и `SplashOverlayHtml` (`viewport-fit=cover`, `env(safe-area-inset-*)`), а также в web-слой (`viewport.js`, `controls.js`, передача `--agy-inset-*` и `--agy-ime-bottom`).
+
+### 2. Производительность, плавные анимации и навигация Android
+* **Нативный сплэш + ленивый `WebView` для ошибок:** `SplashController` переведён на лёгкий `Canvas`-виджет `NativeSplashDotsView`; вспомогательный `WebView` создаётся лениво только при показе ошибок/перезапуска и освобождается при скрытии.
+* **Плавная анимация клавиатуры (API 30+):** добавлен изолированный `ImeInsetsAnimator` на базе `WindowInsetsAnimation.Callback` для покадрового перемещения панели доп. клавиш и контента синхронно с IME.
+* **Живая синхронизация цвета поверхности:** добавлен защищённый токеном мост `AndroidBridge.setSurfaceColor` + `ActivityPainter.applySurfaceColor`, синхронизирующий цвет окна и системных баров с реальным фоном Web UI (`theme_sync`).
+* **Предиктивный жест «Назад» (API 33+):** добавлен `PredictiveBackHelper` и включён `android:enableOnBackInvokedCallback="true"` с сохранением совместимости `onBackPressed()` на API 24–32.
+
+### 3. Стабильность, безопасность и автонастройка среды
+* Исправлены коллизия кодов разрешений (`REQUEST_POST_NOTIFICATIONS`), потеря режима `MODE_SYSTEM` в `ThemeController`, гонки анимаций/watchdog и очистка `WebView` в `SplashController`, утечка `Activity` и очистка незавершённых файлов в `FileDownloader`, динамическое `INTERNAL_BROADCAST` разрешение в dev-сборках `VoiceForegroundService`, а также адресация уведомлений/Share Sheet через общий `HostActivityResolver`.
+* Настроены автопоиск `JAVA_HOME`/`PATH` в `00-env.sh` и автоматический проброс бинарников OpenJDK (`java`, `javac`, `keytool` и др.) в `$PREFIX/bin` при установке через `pkg`.
+* Удалён неиспользуемый код (`DeepLinkHandler`, `SplashLoadingHtml`), изолированы переменные окружения в MCP-тестах, и включена строгая проверка `javac` (`-Xlint:all,-deprecation,-options,-serial -Werror`).
+
+---
+
+## Предыдущие изменения (v2.4.1)
 
 ### 1. Поддержка встроенного веб-терминала и спавнера PTY (PR #19)
 * **Низкоуровневый бинарный патч PTY-шеллы:** Устранено аварийное завершение терминала из-за отсутствия `/bin/bash` на Android. Реализован модульный бинарный патч с сохранением длины строки (`/bin/bash` ➔ `/bin///sh`, ровно 9 байт), безопасно перенаправляющий запросы спавнера ядра в системный шелл Android без сдвига смещений ELF-секций.
