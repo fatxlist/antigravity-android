@@ -10,15 +10,13 @@
 
   # Antigravity for Android
 
-> [!WARNING]
-> **Проект временно приостановлен на несколько месяцев из-за занятости разработчика.**  
-> *(Project is temporarily on hold for several months due to developer workload).*
-
-**Autonomous AI development environment running natively on Android & ARM64.**
+  **Autonomous AI development environment running natively on Android & ARM64.**
 
   [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
   [![Arch](https://img.shields.io/badge/ARM64-v8.0--A%2B-blue?style=flat-square)](https://arm.com)
-  [![Release](https://img.shields.io/badge/Version-2.4.1-blueviolet?style=flat-square)](https://github.com/werdio325-png/antigravity-android/releases)
+  [![Release](https://img.shields.io/badge/App-v2.4.1-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
+  [![Core](https://img.shields.io/badge/Core-v2.34.0-0A7EA4?style=flat-square)](modules/core)
+  [![CI](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml)
   [![License](https://img.shields.io/badge/License-Apache_2.0-orange?style=flat-square)](LICENSE)
 
   <br/>
@@ -37,54 +35,83 @@
 
 **Antigravity for Android** brings autonomous agentic coding directly to mobile hardware.
 
-No PRoot, chroot, or virtualization overhead. Antigravity runs **bare-metal inside native Android userspace (Bionic)**, unleashing the full read/write speed of UFS storage and physical CPU cores. Driven by Gemini models, the agent inspects repositories, authors code across multiple files, compiles binaries, and runs tests completely on-device.
+No PRoot, chroot, or virtualization overhead. Antigravity runs **bare-metal inside native Android userspace (Bionic)** alongside a glibc loader for the embedded `language_server`, unlocking the full I/O bandwidth of UFS storage and physical CPU cores. Driven by Gemini models, the agent inspects repositories, edits code across project trees, executes shell and browser tools, and runs tests on-device.
 
 ---
 
-### Highlights in v2.4
+### Highlights
 
-* **Modular Core:** Clean separation into 6 standalone subsystems (`modules/*`) with independent test suites.
-* **Native Splash:** Canvas-based dot animation saving ~40 MB RAM with instant startup.
-* **Desktop Mode:** Instant toggle in Appearance settings for tablets, external keyboards, and Samsung DeX.
-* **Universal ARMv8.0-A Support:** Built-in transparent atomic & SIMD emulation (`liblse_compat.so`) for older CPUs.
-* **Background Micro-Daemon:** Ultra-lightweight `agy-daemon` (<10 MB RAM) with cron scheduler, file watcher, and AI task queue.
+* **Core & Web v2.34.0:** Updated `language_server` core and web bundle with loopback sidecar cookie proxying, SSE stream resume/recovery, and full BiDi/RTL typography support.
+* **Native MCP Servers:** Auto-seeded `agy-mcp-android` (device, UI, notifications, gateway tools) and `agy-mcp-browser` (`chrome_devtools`) in `~/.gemini/config/mcp_config.json` with bundled agent skills.
+* **Mobile-First Agent UX:** Voice dictation with foreground voice service, interactive tool-approval and subagent notifications (`Approve` / `Deny` / inline reply / `Cancel`), clickable notifications returning to chat, extra keys bar, clipboard image paste, Android Share Sheet intake, local HTML/web preview dialog, Desktop Mode toggle, and double-back exit confirmation.
+* **Gateway & Micro-Daemon:** Multi-threaded `SystemGatewayServer` (`doctor`/`repair`, async `exec_*` tasks, clickable notifications) and lightweight `agy-daemon` with ConnectRPC task dispatch, cron/file/GitHub triggers, and `resolv.conf` watchdog.
+* **Universal ARMv8.0-A Support:** Transparent atomic & SIMD emulation (`liblse_compat.so` with `SA_ONSTACK`), seccomp syscall compatibility (`faccessat`/`fchmodat`), and length-preserving PTY shell retargeting.
+* **Built-in `pkg` & Optional Shizuku:** Fast Termux package manager (`git`, `python`, `nodejs`, `clang`, etc.) plus optional ADB-level control (`uid=2000`) via Shizuku without root.
 
 ---
 
-### Key Features
+### Security & Hardening
 
-* **Autonomous Agent:** Plans tasks, edits code across project trees, executes shell tools, and fixes build errors.
-* **Elevated Control (Shizuku):** Direct ADB-level operations (`uid=2000`) without root for package installs and system diagnostics.
-* **Built-in `pkg` Manager:** Fast package manager installing development runtimes (`git`, `python`, `node`, `clang`) from Termux repos.
-* **Adaptive Viewports:** Seamless touch-first mobile UI with optional desktop layout.
-* **In-Place Upgrades:** Consistent keystore guarantees updating APKs without losing sessions or workspace data.
+* **Authenticated Local Gateway:** Per-install 256-bit secret stored with `0600` permissions in `files/logs/gateway.token`, enforced in constant time via `X-Agy-Gateway-Token` or `Authorization: Bearer` across all `/gateway/*` callers (`agy-mcp-android`, `agy-mcp-browser`, `agy-notify`, Python CLI/bridge).
+* **Pinned Loopback TLS:** Approval callbacks and ConnectRPC notifications validate the bundled core certificate (`res/raw/agy_core_cert`) and loopback hostnames (`127.0.0.1` / `localhost`) via `CoreReadyProbe.configurePinnedLoopbackTls`.
+* **Fail-Closed File Provider & Isolation:** `AppFileProvider` fails closed on missing context, removes broad app-data root exposure, and blocks access to `.gemini`, `gateway.token`, `core.state.json`, `approvals.json`, `shared_prefs`, and `databases`.
+* **Per-Install Identity & Bounded Execution:** `OnboardingSeeder` replaces template UUIDs with a unique per-install `UUID`; `RishExecutor` enforces a 60s timeout, `destroyForcibly()`, and 256 KB output cap; `agy-upgrade` uses single-quoted Python heredocs with environment passing and `printf %q` quoting.
+* **Fail-Closed Release Signing & Policy Integrity:** Account/region eligibility gate bypasses have been removed (`modules/patches` runs core compatibility patches only). Production release builds refuse to run without explicit `AGY_RELEASE_*` signing credentials (`--dev` or `--allow-debug-sign` required for debug keystores).
 
 ---
 
 ### Quick Start
 
-1. **Download APK** from [Releases](https://github.com/werdio325-png/antigravity-android/releases):
-   * `antigravity.apk` — standard release (original Google account checks).
-   * `antigravity-region-bypass.apk` — release with account eligibility check bypass.
-2. **Grant Storage Permission** (`All Files Access`). *(Optional: enable Shizuku for ADB access)*.
-3. **Install Runtimes** via terminal or agent:
+1. **Download `antigravity.apk`** from [Releases](https://github.com/fatxlist/antigravity-android/releases) (or CI workflow artifacts).
+2. **Grant Permissions:**
+   * Allow **All Files Access** (`MANAGE_EXTERNAL_STORAGE`) so the workspace and downloads are accessible on Android 11+.
+   * Allow **Notifications** on Android 13+ (`POST_NOTIFICATIONS`) for tool approval prompts and background tasks.
+   * *(Optional)* Enable **Shizuku** for non-root ADB privileges (`uid=2000`).
+3. **Install Runtimes** via built-in terminal or agent:
    ```bash
    pkg update && pkg install git python nodejs
    ```
 
 ---
 
-### Building & Testing
+### Building, Signing & Testing
+
+#### APK Build
 
 ```bash
-# Build standard release APK (dist/antigravity.apk):
+# Development debug APK (com.agy.dev, port 45158, debuggable):
+bash build.sh --dev
+
+# Standard release APK signed with the debug keystore (for local testing only):
+bash build.sh --allow-debug-sign
+
+# Production release APK (dist/antigravity.apk; fails closed unless signing env vars are set):
+export AGY_RELEASE_KEYSTORE=/path/to/release.keystore
+export AGY_RELEASE_KEY_ALIAS=release_alias
+export AGY_RELEASE_KEY_PASS=...
+export AGY_RELEASE_STORE_PASS=...
 bash build.sh
+```
 
-# Build release APK with region bypass (dist/antigravity-region-bypass.apk):
-bash build.sh --region-bypass
+> [!IMPORTANT]
+> Tagged CI releases (`v*`) require GitHub Actions secrets `AGY_RELEASE_KEYSTORE_B64`, `AGY_RELEASE_KEY_ALIAS`, `AGY_RELEASE_KEY_PASS`, and `AGY_RELEASE_STORE_PASS`. Never distribute `--allow-debug-sign` builds as production releases.
 
-# Run all test suites:
+#### Automated Test Suites
+
+```bash
+# Run all 6 modular subsystems + live E2E core test (requires full toolchain & Android/Linux env):
 bash test_all_modules.sh
+
+# Individual suites (also run automatically in GitHub Actions CI):
+bash modules/core/tests/run_all.sh
+bash modules/patches/tests/run_all.sh
+bash modules/io/tests/run_all.sh
+bash modules/env/tests/run_all.sh
+bash modules/builder/tests/run_all.sh
+python3 -B -m unittest discover -s env/tests -v
+bash env/build.sh assets && bash env/tests/invariant
+bash web/build.sh && bash web/tests/selftest.sh && node web/tests/test_web_patches.mjs
+bash app/src/test/run_java_tests.sh
 ```
 
 ---
@@ -92,28 +119,31 @@ bash test_all_modules.sh
 ### Repository Structure
 
 ```text
-antigravity/
-├── config/             # App constants, environment paths, and AI rules
-├── modules/            # Decoupled core modules (v2.4+)
-│   ├── core/           # Binary unpacking, glibc loader, shims, SHA-256 manifest
-│   ├── patches/        # Binary patch engine (syscall emulation, resolv, SIGILL)
+antigravity-android/
+├── .github/workflows/  # CI test suite, APK build/verification, and tagged releases
+├── config/             # App constants (app.env, tools.env) and signing config template
+├── modules/            # Decoupled subsystems
+│   ├── core/           # Pristine core binary, glibc loader, shims, seed state, SHA-256 manifest
+│   ├── patches/        # Core compatibility patcher (syscalls, SIGILL, resolv, failfast, PTY)
 │   ├── io/             # High-performance I/O Bus: event broker, FIFO pipes, sockets
-│   ├── env/            # Path resolver, diagnostics, Flight Recorder logs, CLI
-│   ├── builder/        # Gradle-free APK builder (javac, D8, aapt, zipalign, apksigner)
-│   └── runner/         # Standalone runtime preparation, port probe, E2E tests
-├── app/                # Android host app (native splash, WebView, system bridges)
-├── web/                # Local web frontend, desktop mode toggle, themes
-├── env/                # Bionic userspace, Termux overlay, pkg manager, liblse_compat
-├── docs/assets/        # Screenshots, banners, and diagrams
+│   ├── env/            # Path resolver, authenticated bridge client, diagnostics, CLI
+│   ├── builder/        # Gradle-free APK builder (javac, D8, aapt, align.py, fail-closed signer)
+│   └── runner/         # Standalone runtime preparation, health probe, E2E test
+├── app/                # Android host app
+│   ├── src/main/       # Native splash, WebView, gateway, notifications, MCP/Shizuku bridges
+│   └── src/test/       # Host JVM unit tests (UnitTests.java, run_java_tests.sh)
+├── web/                # Local web frontend, SSE recovery, theme sync, BiDi, desktop mode toggle
+├── env/                # Bionic userspace, Termux overlay, pkg manager, agy-daemon, liblse_compat
+├── docs/assets/        # Screenshots and branding assets
 ├── build.sh            # Root APK build script
-└── test_all_modules.sh # Test suite for all 6 modules
+└── test_all_modules.sh # Full modular test runner
 ```
 
 > [!TIP]
-> Each module in `modules/`, `app/`, `web/`, and `env/` includes its own dedicated `README.md` with in-depth technical documentation.
+> Each subsystem in `modules/`, `app/`, `web/`, and `env/` includes its own `README.md` with deeper technical details.
 
 ---
 
 <div align="center">
-  <sub>Licensed under the <a href="LICENSE">Apache 2.0 License</a></sub>
+  <sub>Licensed under the <a href="LICENSE">Apache 2.0 License</a> &bull; Forked from <a href="https://github.com/werdio325-png/antigravity-android">werdio325-png/antigravity-android</a></sub>
 </div>
