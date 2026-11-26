@@ -145,6 +145,9 @@ bash modules/builder/build_apk.sh --dev
 
 # Запуск тестов модуля builder:
 bash modules/builder/tests/run_all.sh
+
+# Проверка консистентности версий (config/app.env, README, RELEASE_NOTES.md, GITHUB_REF):
+python3 modules/builder/check_versions.py
 ```
 
 ---

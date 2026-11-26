@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag (e.g. v2.4.1)'
+        description: 'Release Tag (e.g. v2.5.1)'
         required: false
-        default: 'v2.4.1'
+        default: ''
       draft:
         description: 'Create Draft Release'
         type: boolean
@@ -31,6 +31,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -104,6 +108,7 @@ jobs:
 
       - name: Run Automated Test Suites
         run: |
+          python3 modules/builder/check_versions.py
           bash modules/core/tests/run_all.sh
           bash modules/patches/tests/run_all.sh
           bash modules/io/tests/run_all.sh
@@ -162,36 +167,4 @@ jobs:
           files: |
             dist/antigravity.apk
             dist/SHA256SUMS.txt
-          body: |
-            <div align="center">
-              <h3>Antigravity for Android</h3>
-              <p>Autonomous AI Coding Environment &bull; Native Bionic Userspace &bull; ARM64</p>
-            </div>
-
-            ---
-
-            ### Packages & Artifacts
-
-            | Package | Description |
-            | :--- | :--- |
-            | **`antigravity.apk`** | Standard production release with native bionic engine (com.agy, port 45157) |
-            | **`SHA256SUMS.txt`** | Cryptographic checksums for package integrity verification |
-
-            ---
-
-            ### Key Highlights in this Release
-
-            * **Built-in Web Terminal & PTY Support (PR #19):** Enabled native built-in web terminal on Android userspace via length-preserving PTY shell binary patching (`/bin/bash` -> `/bin///sh`), resilient prioritized shell fallback hierarchy (`$PREFIX/bin/bash` -> `runtime/bin/bash` -> `/system/bin/sh`), and proper `TERM=xterm-256color` / `TERMINFO` environment configuration.
-            * **AAPT Build Reliability:** Fixed `aapt` crash with `SIGABRT (134)` on Android ARM64 userspace builds by ensuring `ANDROID_DATA` environment export.
-            * **Security Hardening (Issue #6):** Completely removed hardcoded `android:debuggable="true"` from production builds, preventing unauthorized access to OAuth credentials and internal user files via `run-as`. Dev builds now isolate debuggable flags to `--dev` builds.
-            * **Media & File Picker Overhaul (Issue #8):** Replaced SAF-only document picker with universal native Android chooser. Users can now attach photos, videos, and files directly from Gallery, Google Photos, or File Managers with automatic persistent URI permissions.
-            * **OAuth & Browser Redirection Streamlined:** Completely eliminated 80ms disk polling and temporary files. Direct stdout capture and clean native browser intent dispatching without AIDL overhead or IPC deadlocks.
-            * **ARMv8.0-A CPU Architecture & SIMD Emulation:** Added transparent atomic & SIMD emulation (`liblse_compat.so`) for FEAT_LSE, FEAT_RDM, and FEAT_FCMA, resolving `FATAL ERROR: This binary was compiled with lse enabled` and `SIGILL` crashes on Snapdragon 685 (Cortex-A53 / Redmi Note 12).
-            * **Torch / Flashlight Hardware Bridge:** Integrated hardware torch control bridge and CLI utility (`torch on/off`).
-            * **Integrated Log Export & Diagnostics:** Added "Copy Logs" and "Save Logs" actions to the startup failure splash overlay for one-tap troubleshooting.
-            * **Autonomous Background Micro-Daemon (`agy-daemon`):** Background task engine with triggers for delays, intervals, file watching, and GitHub notifications.
-
-            ---
-
-            > [!NOTE]
-            > **Seamless Upgrades:** Built with the consistent embedded signing keystore. You can install this update directly over previous v2.x releases without uninstalling or losing local projects.
+          body_path: RELEASE_NOTES.md

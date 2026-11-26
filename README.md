@@ -14,7 +14,7 @@
 
   [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
   [![Arch](https://img.shields.io/badge/ARM64-v8.0--A%2B-blue?style=flat-square)](https://arm.com)
-  [![Release](https://img.shields.io/badge/App-v2.4.1-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
+  [![Release](https://img.shields.io/badge/App-v2.5.2-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
   [![Core](https://img.shields.io/badge/Core-v2.34.0-0A7EA4?style=flat-square)](modules/core)
   [![CI](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml)
   [![License](https://img.shields.io/badge/License-Apache_2.0-orange?style=flat-square)](LICENSE)
@@ -94,15 +94,16 @@ bash build.sh
 ```
 
 > [!IMPORTANT]
-> Tagged CI releases (`v*`) require GitHub Actions secrets `AGY_RELEASE_KEYSTORE_B64`, `AGY_RELEASE_KEY_ALIAS`, `AGY_RELEASE_KEY_PASS`, and `AGY_RELEASE_STORE_PASS`. Never distribute `--allow-debug-sign` builds as production releases.
+> Tagged CI releases (`v*`) require GitHub Actions secrets `AGY_RELEASE_KEYSTORE_B64`, `AGY_RELEASE_KEY_ALIAS`, `AGY_RELEASE_KEY_PASS`, and `AGY_RELEASE_STORE_PASS`. Never distribute `--allow-debug-sign` builds as production releases. Release descriptions are sourced from `RELEASE_NOTES.md` after `modules/builder/check_versions.py` verifies version parity with `config/app.env`.
 
 #### Automated Test Suites
 
 ```bash
-# Run all 6 modular subsystems + live E2E core test (requires full toolchain & Android/Linux env):
+# Run all CI suites + live E2E core test (requires full toolchain & Android/Linux env):
 bash test_all_modules.sh
 
 # Individual suites (also run automatically in GitHub Actions CI):
+python3 modules/builder/check_versions.py
 bash modules/core/tests/run_all.sh
 bash modules/patches/tests/run_all.sh
 bash modules/io/tests/run_all.sh

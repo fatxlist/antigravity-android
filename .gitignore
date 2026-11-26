@@ -5,6 +5,8 @@ cache/
 *.apk
 *.dex
 *.class
+*.keystore
+*.jks
 
 # Archives and binaries
 *.tar

@@ -1,4 +1,4 @@
-# Antigravity for Android v2.5.1
+# Antigravity for Android v2.5.2
 
 ## Спецификация пакетов релиза
 
@@ -7,12 +7,23 @@
 | **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с нативным Bionic-рантаймом (чистая версия без модификаций кода аутентификации). |
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
 
-> [!NOTE]
-> Сборка `antigravity.apk` для релиза `v2.5.1` выполнена в GitHub Actions с флагом `--allow-debug-sign`, так как релизные секреты подписи `AGY_RELEASE_*` ещё не добавлены в GitHub Secrets репозитория.
+> [!IMPORTANT]
+> Начиная с `v2.5.2`, релизный APK подписывается отдельным release-ключом. При переходе с предыдущих сборок, подписанных `debug.keystore` (включая `v2.5.1`), Android не установит APK поверх старого — сохраните проекты, удалите старое приложение и установите `v2.5.2` начисто.
 
 ---
 
-## Изменения и исправления (v2.5.1)
+## Изменения и исправления (v2.5.2)
+
+* **Релизная подпись и безопасность репозитория:** удалён `tools/debug.keystore` из индекса Git, в `.gitignore` добавлены `*.keystore` и `*.jks`.
+* **DNS для Bionic Go-инструментов (`gh`, `go` и др.):** Bionic-мосты (`ShellBridgeInstaller` `BRIDGE_FORMAT = 6`, `pkg` и `00-env.sh`) очищают унаследованный от glibc-ядра токен `GODEBUG=netdns=go`, возвращая нативный DNS-резолвер Android.
+* **CI и автоматизация релизов:**
+  * Описание GitHub Release теперь автоматически берётся из `RELEASE_NOTES.md`, добавлен `concurrency` в `.github/workflows/build-and-release.yml`.
+  * Добавлен скрипт `modules/builder/check_versions.py` для проверки согласованности версий между `config/app.env`, `README.md`, `README.ru.md`, `RELEASE_NOTES.md` и тегом релиза.
+* **Тесты:** исправлено зависание `modules/core/tests/test_shims.py` на Android-хосте (`AGY_SHIM_NO_AM=1` и таймаут), а `test_all_modules.sh` синхронизирован с полным набором проверок CI.
+
+---
+
+## Предыдущие изменения (v2.5.1)
 
 * **Устранена ложная ошибка `Antigravity Core Error` (`[lse_compat] INIT: installing kernel SIGILL handler`):** в `CoreEventWatcher.isFatalErrorLine()` диагностические сообщения инициализации `liblse_compat.so` (`INIT:` / `SUCCESS:`) отделены от реальных падений (`FATAL:`, `ERROR:`, `panic:`, `fatal error:`, `SIGSEGV`, необработанный `SIGILL`).
 * **Настоящий full-bleed Edge-to-Edge без чёрных полос сверху и снизу:**

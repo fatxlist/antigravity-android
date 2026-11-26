@@ -10,6 +10,8 @@ import shutil
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE_ROOT = os.path.dirname(TESTS_DIR)
+SHIM_TIMEOUT = 15
+
 
 class TestShims(unittest.TestCase):
     def setUp(self):
@@ -21,12 +23,14 @@ class TestShims(unittest.TestCase):
         # Ensure LD_* are not inherited interfering
         env.pop("LD_PRELOAD", None)
         env.pop("LD_LIBRARY_PATH", None)
+        env["AGY_SHIM_NO_AM"] = "1"
         return subprocess.run(
             ["sh", shim_path] + args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env
+            env=env,
+            timeout=SHIM_TIMEOUT,
         )
 
     def test_01_http_url_extraction(self):
@@ -80,11 +84,15 @@ class TestShims(unittest.TestCase):
             shutil.copyfile(os.path.join(MODULE_ROOT, "shims", "browser", "chrome.sh"), chrome_dest)
             os.chmod(chrome_dest, 0o755)
 
+            env = os.environ.copy()
+            env["AGY_SHIM_NO_AM"] = "1"
             res = subprocess.run(
                 ["sh", chrome_dest, "--incognito", "https://google.com"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                env=env,
+                timeout=SHIM_TIMEOUT,
             )
             self.assertEqual(res.returncode, 0)
             self.assertIn("AGY_OPEN_URL=https://google.com", res.stdout)

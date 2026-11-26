@@ -35,7 +35,7 @@ public final class ShellBridgeInstaller {
     /** Records which prefix the bulk bridges were generated for. Bump when the
      *  bridge script format changes so a warm launch regenerates them once. */
     private static final String BRIDGE_MARKER = ".agy-bridges";
-    private static final int BRIDGE_FORMAT = 5;
+    private static final int BRIDGE_FORMAT = 6;
 
     private ShellBridgeInstaller() {
     }
@@ -297,6 +297,7 @@ public final class ShellBridgeInstaller {
         sb.append("export GIT_TEMPLATE_DIR=\"$PREFIX/share/git-core/templates\"\n");
         sb.append("export GIT_EXEC_PATH=\"$PREFIX/libexec/git-core\"\n");
         sb.append("export PAGER=\"cat\"\n");
+        appendStripGodebugNetdnsGo(sb, "");
         sb.append("if [ -x \"$PREFIX/bin/").append(target).append("\" ]; then\n");
         sb.append("  exec \"$PREFIX/bin/").append(target).append("\" \"$@\"\n");
         sb.append("else\n");
@@ -338,6 +339,7 @@ public final class ShellBridgeInstaller {
         sb.append("  export OPENSSL_CONF=\"$PREFIX/etc/tls/openssl.cnf\"\n");
         sb.append("  export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("  export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        appendStripGodebugNetdnsGo(sb, "  ");
         sb.append("  exec \"$PREFIX/bin/node\" \"$@\"\n");
         sb.append("}\n");
         sb.append("\n");
@@ -417,6 +419,7 @@ public final class ShellBridgeInstaller {
         sb.append("      export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("      export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("      export LANG=\"C.UTF-8\"\n");
+        appendStripGodebugNetdnsGo(sb, "      ");
         sb.append("      printf '[%s] on-demand nodejs bootstrap started\\n' \"$(date +%s 2>/dev/null || echo 0)\" >> \"$LOG_FILE\" 2>&1\n");
         sb.append("      \"$PREFIX/bin/pkg\" update >> \"$LOG_FILE\" 2>&1 && \"$PREFIX/bin/pkg\" install nodejs >> \"$LOG_FILE\" 2>&1\n");
         sb.append("    ) || true\n");
@@ -483,6 +486,7 @@ public final class ShellBridgeInstaller {
         sb.append("export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("export LANG=\"C.UTF-8\"\n");
+        appendStripGodebugNetdnsGo(sb, "");
         sb.append("WAIT=0\n");
         sb.append("while [ ! -x \"$PREFIX/bin/").append(target).append("\" ]");
         if (fallbackTarget != null) {
@@ -503,6 +507,26 @@ public final class ShellBridgeInstaller {
         sb.append("echo \"agy bridge: $PREFIX/bin/").append(target).append(" not found\" >&2\n");
         sb.append("exit 127\n");
         writeScript(bridge, sb.toString());
+    }
+
+    /**
+     * Strips {@code netdns=go} from inherited {@code GODEBUG}: {@code CoreEnvironment} sets
+     * {@code GODEBUG=netdns=go} for the glibc {@code language_server}, which would otherwise
+     * force Termux/Bionic Go binaries ({@code gh}, etc.) onto the pure-Go resolver looking for
+     * {@code /data/data/com.termux/.../resolv.conf} instead of Android's native cgo/netd DNS.
+     */
+    private static void appendStripGodebugNetdnsGo(StringBuilder sb, String indent) {
+        sb.append(indent).append("# Drop glibc language_server's netdns=go so Bionic Go tools use Android DNS.\n");
+        sb.append(indent).append("case \",${GODEBUG:-},\" in\n");
+        sb.append(indent).append("  *,netdns=go,*)\n");
+        sb.append(indent).append("    if [ \"$GODEBUG\" = \"netdns=go\" ]; then\n");
+        sb.append(indent).append("      unset GODEBUG\n");
+        sb.append(indent).append("    else\n");
+        sb.append(indent).append("      GODEBUG=\"$(printf '%s' \",$GODEBUG,\" | sed ':a;s/,netdns=go,/,/g;ta;s/^,//;s/,$//')\"\n");
+        sb.append(indent).append("      [ -n \"$GODEBUG\" ] && export GODEBUG || unset GODEBUG\n");
+        sb.append(indent).append("    fi\n");
+        sb.append(indent).append("    ;;\n");
+        sb.append(indent).append("esac\n");
     }
 
     private static void writeScript(File bridge, String script) {

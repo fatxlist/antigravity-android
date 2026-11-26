@@ -44,6 +44,17 @@ export PAGER="less"
 export OPENSSL_CONF="$PREFIX/etc/tls/openssl.cnf"
 export LANG="${LANG:-C.UTF-8}"
 export TZ="${TZ:-UTC}"
+# Drop glibc language_server's netdns=go so Bionic Go tools (gh, go, etc.) use Android DNS.
+case ",${GODEBUG:-}," in
+    *,netdns=go,*)
+        if [ "$GODEBUG" = "netdns=go" ]; then
+            unset GODEBUG
+        else
+            GODEBUG="$(printf '%s' ",$GODEBUG," | sed ':a;s/,netdns=go,/,/g;ta;s/^,//;s/,$//')"
+            [ -n "$GODEBUG" ] && export GODEBUG || unset GODEBUG
+        fi
+        ;;
+esac
 # CPU & toolchain compatibility: baseline ARMv8.0-A with dynamic outline atomics
 export CFLAGS="-march=armv8-a -moutline-atomics ${CFLAGS:-}"
 export CXXFLAGS="-march=armv8-a -moutline-atomics ${CXXFLAGS:-}"

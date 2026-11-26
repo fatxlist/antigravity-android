@@ -147,6 +147,8 @@ modules/core/
 | Каталог | Содержимое | Назначение |
 | :--- | :--- | :--- |
 | `bin/` | `liblanguage_server.so`, `libloader.so`, `ld-linux-aarch64.so.1`, `xdg-open`, `chrome`, `rish`... | Исполняемые бинарники, загрузчик glibc и shell-шимы |
+
+> Для изоляции тестов шима `xdg-open` переменная окружения `AGY_SHIM_NO_AM=1` отключает fallback-вызовы `/system/bin/am`.
 | `lib/` | `libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `liblse_compat.so`, `ld-linux-aarch64.so.1` | Зависимости glibc и LSE-атомиков под AArch64 |
 | `etc/` | `hosts`, `resolv.conf`, `nsswitch.conf` | Сетевые и DNS-конфигурации для работы сетевого стека glibc |
 | `certs/` | `ca-certificates.crt` | Корневые SSL/TLS сертификаты для Go TLS рантайма |

@@ -125,6 +125,16 @@ export LD_LIBRARY_PATH="\$PREFIX/lib"
 export PATH="\$PREFIX/bin:/system/bin"
 export OPENSSL_CONF="\$PREFIX/etc/tls/openssl.cnf"
 export SSL_CERT_FILE="\$PREFIX/etc/tls/cert.pem"
+case ",\${GODEBUG:-}," in
+  *,netdns=go,*)
+    if [ "\$GODEBUG" = "netdns=go" ]; then
+      unset GODEBUG
+    else
+      GODEBUG="\$(printf '%s' ",\$GODEBUG," | sed ':a;s/,netdns=go,/,/g;ta;s/^,//;s/,\$//')"
+      [ -n "\$GODEBUG" ] && export GODEBUG || unset GODEBUG
+    fi
+    ;;
+esac
 exec "\$PREFIX/bin/$bname" "\$@"
 EOF
                         chmod 755 "$runtime_bin/$bname" 2>/dev/null || true

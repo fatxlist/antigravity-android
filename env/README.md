@@ -84,7 +84,7 @@ env/
 - **`$PREFIX/lib`**: разделяемые библиотеки Bionic (`libtermux-exec.so`).
 - **`$PREFIX/etc`**: конфигурационные файлы, включая TLS-сертификаты (`etc/tls/cert.pem`).
 - **`$PREFIX/libexec/pkg`**: системные модули менеджера `pkg`.
-- **`$PREFIX/etc/profile.d/00-env.sh`**: автоматически обнаруживает установленный OpenJDK в `$PREFIX/lib/jvm/java-*-openjdk`, экспортирует `JAVA_HOME` и добавляет `$JAVA_HOME/bin` в `PATH`.
+- **`$PREFIX/etc/profile.d/00-env.sh`**: автоматически обнаруживает установленный OpenJDK в `$PREFIX/lib/jvm/java-*-openjdk`, экспортирует `JAVA_HOME`, добавляет `$JAVA_HOME/bin` в `PATH` и очищает унаследованный `GODEBUG=netdns=go` (чтобы Bionic Go-утилиты `gh`, `go` и др. использовали нативный DNS-резолвер Android).
 - **`$PREFIX/var/lib/pkg`**: база данных установленных пакетов (`installed/`), кэш `.deb` (`cache/`) и индексы (`index/`).
 
 ---
