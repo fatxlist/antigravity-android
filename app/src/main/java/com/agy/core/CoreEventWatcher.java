@@ -81,10 +81,7 @@ public final class CoreEventWatcher {
             String lower = safeLine.toLowerCase(Locale.US);
 
             // 1. Fatal errors (highest priority)
-            if (lower.contains("panic:")
-                    || lower.contains("fatal error:")
-                    || lower.contains("sigsegv")
-                    || lower.contains("sigill")) {
+            if (isFatalErrorLine(safeLine)) {
                 handleFatalError(safeLine);
                 return;
             }
@@ -145,6 +142,25 @@ public final class CoreEventWatcher {
         } catch (Throwable t) {
             Log.w(TAG, "event watcher line error: " + t.getMessage());
         }
+    }
+
+    /** Returns true only when {@code safeLine} represents a real fatal error or crash. */
+    public static boolean isFatalErrorLine(String safeLine) {
+        if (safeLine == null || safeLine.isEmpty()) {
+            return false;
+        }
+        String lower = safeLine.toLowerCase(Locale.US);
+        if (lower.contains("[lse_compat]")) {
+            return lower.contains("fatal:") || lower.contains("error:");
+        }
+        if ((lower.contains("sigill") || lower.contains("sigsegv"))
+                && (lower.contains("installing") || lower.contains("handler active"))) {
+            return false;
+        }
+        return lower.contains("panic:")
+                || lower.contains("fatal error:")
+                || lower.contains("sigsegv")
+                || lower.contains("sigill");
     }
 
     private void handleTaskStart(String safeLine) {

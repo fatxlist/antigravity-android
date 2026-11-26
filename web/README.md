@@ -182,8 +182,9 @@ web/
 ### 6.2. Мобильные оптимизации (Mobile & Touch Optimizations)
 - **`web_optimizations.js`**:
   - `touch-action: manipulation` на кнопках, ссылках и инпутах отключает браузерную 300-миллисекундную задержку двойного тапа.
-  - `visualViewport.addEventListener('resize')` динамически пересчитывает переменную `--agy-vvh` в пикселях, предотвращая дергание поля чата при выезде клавиатуры IME.
-  - Выборочный `transform: translateZ(0)` форсирует GPU-слои только для ключевых контейнеров скролла (`chat-container`, `.scrollable`), предотвращая исчерпание видеопамяти и зависания RenderThread на чипах ARM Mali.
+  - Безопасные отступы `--agy-safe-top` / `--agy-safe-bottom` / `--agy-safe-left` / `--agy-safe-right` объединяют нативные `env(safe-area-inset-*)` и предзагруженные хостом `--agy-inset-*` (с обнулением нижнего отступа через класс `html.agy-extra-keys` при видимой панели быстрых клавиш) для шапки, поля ввода, `bottom-sheet`, `.agy-shell`, настроек и онбординга.
+  - `__agSetImeAnimating(true/false)` и дедупликация `--agy-vvh` в `viewport.js` (через `requestAnimationFrame`) приостанавливают каскад `window.resize` / `visualViewport.resize` и `ResizeObserver` во время анимации клавиатуры IME с однократным сбросом в `onEnd` (и 450мс страховкой), устраняя дерганье кадра.
+  - Скрытие десктопного `overlay-scrollbar` и блокировка дорогостоящих `backdrop-filter` / `mask-image` для плавного скролла на мобильных GPU.
 - **`touch_model_menu.js`**:
   - Выпадающий список выбора моделей Antigravity в библиотеке Base UI открывает меню уровней размышления (Low / Medium / High) исключительно по hover-событию мыши.
   - На сенсорном экране тап приводил к мгновенному выбору модели по умолчанию без раскрытия настроек.

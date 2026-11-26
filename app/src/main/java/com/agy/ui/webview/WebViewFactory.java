@@ -22,8 +22,8 @@ public final class WebViewFactory {
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
         view.requestFocus(View.FOCUS_DOWN);
-        // Hardware layer: hand compositing to the GPU (manifest enables HW accel).
-        view.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        // Keep default LAYER_TYPE_NONE so Chromium GPU composites directly without
+        // reallocating an offscreen HWUI FBO on every IME resize frame.
         view.addJavascriptInterface(bridge, "Android");
         // Android WebView needs an explicit focus grant for the soft keyboard to show.
         view.setOnTouchListener(new View.OnTouchListener() {

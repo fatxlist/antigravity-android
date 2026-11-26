@@ -73,7 +73,11 @@ function createMockDom() {
       this.attributes = new Map();
       this.children = [];
       this.parentNode = null;
-      this.style = {};
+      this.style = {
+        _props: new Map(),
+        setProperty(k, v) { this._props.set(k, String(v)); },
+        getPropertyValue(k) { return this._props.get(k) || ''; }
+      };
       this._id = '';
       this._className = '';
       this._value = '';
@@ -95,6 +99,14 @@ function createMockDom() {
         remove: (...cls) => {
           cls.forEach((c) => this.classList._set.delete(c));
           this._className = Array.from(this.classList._set).join(' ');
+        },
+        toggle: (c, force) => {
+          const has = this.classList._set.has(c);
+          const next = force === undefined ? !has : !!force;
+          if (next) this.classList._set.add(c);
+          else this.classList._set.delete(c);
+          this._className = Array.from(this.classList._set).join(' ');
+          return next;
         },
         contains: (c) => this.classList._set.has(c)
       };
@@ -705,4 +717,144 @@ function createMockDom() {
     try { fs.unlinkSync(tmpFile); } catch (_) {}
   }
   console.log('test patch_main.py graceful fallback: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 5. Test patches/web_optimizations.js (IME resize/RO deferral + safe-area CSS)
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document } = createMockDom();
+
+  class MockEventTarget {
+    constructor() {
+      this._etListeners = new Map();
+    }
+    addEventListener(type, fn) {
+      if (!this._etListeners.has(type)) this._etListeners.set(type, []);
+      this._etListeners.get(type).push(fn);
+    }
+    removeEventListener(type, fn) {
+      const arr = this._etListeners.get(type);
+      if (!arr) return;
+      const idx = arr.indexOf(fn);
+      if (idx >= 0) arr.splice(idx, 1);
+    }
+    dispatchEvent(ev) {
+      const arr = this._etListeners.get(ev.type) || [];
+      for (const fn of [...arr]) fn.call(this, ev);
+      return true;
+    }
+  }
+
+  class MockResizeObserver {
+    constructor(cb) {
+      this.cb = cb;
+      this.disconnected = false;
+      MockResizeObserver.instances.push(this);
+    }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+    trigger(entries) {
+      if (!this.disconnected) this.cb(entries, this);
+    }
+  }
+  MockResizeObserver.instances = [];
+
+  const vv = new MockEventTarget();
+  vv.height = 800;
+  windowObj.EventTarget = MockEventTarget;
+  windowObj.HTMLElement = function () {};
+  windowObj.HTMLElement.prototype = { focus() {} };
+  windowObj.ResizeObserver = MockResizeObserver;
+  windowObj.visualViewport = vv;
+  windowObj._etListeners = new Map();
+  Object.setPrototypeOf(windowObj, MockEventTarget.prototype);
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'web_optimizations.js'), 'utf8');
+  const ctx = vm.createContext(windowObj);
+  vm.runInContext(code, ctx);
+  const winProxy = vm.runInContext('window', ctx);
+
+  const injectedStyle = document.head.querySelector('[data-agy="web-optimizations"]');
+  assert.ok(injectedStyle, 'web-optimizations style tag should be injected');
+  assert.ok(injectedStyle.textContent.includes('--agy-safe-top'), 'Safe-area top CSS variable must be defined');
+  assert.ok(injectedStyle.textContent.includes('--agy-safe-bottom'), 'Safe-area bottom CSS variable must be defined');
+  assert.ok(injectedStyle.textContent.includes('html.agy-extra-keys'), 'Extra-keys bottom safe-area override must be present');
+
+  let resizeCalls = 0;
+  let vvResizeCalls = 0;
+  let removedResizeCalls = 0;
+  const onWinResize = () => { resizeCalls++; };
+  const onRemovedResize = () => { removedResizeCalls++; };
+  winProxy.addEventListener('resize', onWinResize);
+  winProxy.addEventListener('resize', onRemovedResize);
+  winProxy.removeEventListener('resize', onRemovedResize);
+  vv.addEventListener('resize', () => { vvResizeCalls++; });
+
+  let roActiveCalls = 0;
+  let roDisconnectedCalls = 0;
+  const roActive = new winProxy.ResizeObserver(() => { roActiveCalls++; });
+  const roStale = new winProxy.ResizeObserver(() => { roDisconnectedCalls++; });
+  const origActiveInst = MockResizeObserver.instances[0];
+  const origStaleInst = MockResizeObserver.instances[1];
+
+  winProxy.__agSetImeAnimating(true);
+  assert.equal(winProxy.__agIsImeAnimating(), true);
+
+  // Fire multiple resize & ResizeObserver frames during IME transition
+  vv.height = 600;
+  winProxy.dispatchEvent(new winProxy.Event('resize'));
+  winProxy.dispatchEvent(new winProxy.Event('resize'));
+  vv.dispatchEvent(new winProxy.Event('resize'));
+  origActiveInst.trigger([{ target: 'box1' }]);
+  origActiveInst.trigger([{ target: 'box2' }]);
+  origStaleInst.trigger([{ target: 'stale' }]);
+  roStale.disconnect();
+
+  assert.equal(resizeCalls, 0, 'window.resize must be deferred during IME animation');
+  assert.equal(vvResizeCalls, 0, 'visualViewport.resize must be deferred during IME animation');
+  assert.equal(roActiveCalls, 0, 'ResizeObserver must be deferred during IME animation');
+
+  winProxy.__agSetImeAnimating(false);
+  assert.equal(winProxy.__agIsImeAnimating(), false);
+  assert.equal(resizeCalls, 1, 'Deferred window.resize must flush once on IME animation end');
+  assert.equal(vvResizeCalls, 1, 'Deferred visualViewport.resize must flush once on IME animation end');
+  assert.equal(removedResizeCalls, 0, 'Removed resize listener must not fire');
+  assert.equal(roActiveCalls, 1, 'Deferred ResizeObserver must flush once with latest entries');
+  assert.equal(roDisconnectedCalls, 0, 'Disconnected ResizeObserver must not flush after disconnect()');
+
+  console.log('test web_optimizations.js: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 6. Test patches/theme_sync.js (surface color prefers mobile-layout over body)
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document, body } = createMockDom();
+  const syncedColors = [];
+  windowObj.__AG_HOST_THEME__ = 'light';
+  windowObj.__AG_NATIVE_BRIDGE_TOKEN__ = 'tok-theme';
+  windowObj.Android = {
+    getTheme: () => 'light',
+    setThemeByUser: () => true,
+    onVisualThemeChanged: () => {},
+    setSurfaceColor: (tok, hex) => {
+      if (tok === 'tok-theme') syncedColors.push(hex);
+      return true;
+    }
+  };
+  const mobileLayout = document.createElement('div');
+  mobileLayout.setAttribute('data-testid', 'mobile-layout');
+  body.appendChild(mobileLayout);
+  body.style.backgroundColor = 'rgb(0, 0, 0)';
+  mobileLayout.style.backgroundColor = 'rgb(255, 255, 255)';
+  windowObj.getComputedStyle = (el) => ({
+    backgroundColor: el?.style?.backgroundColor || 'transparent'
+  });
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'theme_sync.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  assert.ok(syncedColors.includes('#ffffff'), 'Surface sync should read [data-testid="mobile-layout"] background before body');
+  console.log('test theme_sync.js: OK');
 }

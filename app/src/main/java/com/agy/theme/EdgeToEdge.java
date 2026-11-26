@@ -82,6 +82,14 @@ public final class EdgeToEdge {
         return LEGACY_LIGHT_SCRIM;
     }
 
+    /**
+     * Returns additional bottom padding needed above the persistent navigation bar /
+     * extra-keys bar while the IME is open.
+     */
+    public static int computeImeBottomPadding(int imeBottom, int navBottom) {
+        return Math.max(0, imeBottom - Math.max(0, navBottom));
+    }
+
     /** Combines system-bar, display-cutout, and IME insets into effective edge paddings. */
     public static InsetsRect computeEffectiveInsets(
             int sysLeft, int sysTop, int sysRight, int sysBottom,
@@ -95,9 +103,36 @@ public final class EdgeToEdge {
         return new InsetsRect(left, top, right, bottom, navBottom, Math.max(0, imeBottom));
     }
 
+    /**
+     * Separates persistent bottom navigation bar height from software keyboard (IME)
+     * height on API 24-29 where both share {@code systemWindowInsetBottom}.
+     */
+    public static InsetsRect computeLegacyInsets(
+            int sysLeft, int sysTop, int sysRight, int sysBottom, int stableBottom,
+            int cutoutLeft, int cutoutTop, int cutoutRight, int cutoutBottom,
+            int imeThresholdPx) {
+        int baseNav = Math.max(0, Math.max(stableBottom, cutoutBottom));
+        int threshold = Math.max(1, imeThresholdPx);
+        boolean isIme = sysBottom > baseNav && (sysBottom - baseNav) >= threshold;
+        int effectiveSysBottom = isIme ? baseNav : Math.max(0, sysBottom);
+        int imeBottom = isIme ? sysBottom : 0;
+        return computeEffectiveInsets(
+                sysLeft, sysTop, sysRight, effectiveSysBottom,
+                cutoutLeft, cutoutTop, cutoutRight, cutoutBottom,
+                imeBottom);
+    }
+
     /** Extracts combined system bar, display cutout, and IME insets across API levels. */
-    @SuppressWarnings("deprecation")
     public static InsetsRect resolveInsets(WindowInsets insets) {
+        return resolveInsets(insets, 200);
+    }
+
+    /**
+     * Extracts combined system bar, display cutout, and IME insets across API levels,
+     * using {@code imeThresholdPx} to distinguish IME overlap on API 24-29.
+     */
+    @SuppressWarnings("deprecation")
+    public static InsetsRect resolveInsets(WindowInsets insets, int imeThresholdPx) {
         if (insets == null) {
             return new InsetsRect(0, 0, 0, 0, 0, 0);
         }
@@ -114,6 +149,7 @@ public final class EdgeToEdge {
         int sysTop = insets.getSystemWindowInsetTop();
         int sysRight = insets.getSystemWindowInsetRight();
         int sysBottom = insets.getSystemWindowInsetBottom();
+        int stableBottom = insets.getStableInsetBottom();
         int cutoutLeft = 0;
         int cutoutTop = 0;
         int cutoutRight = 0;
@@ -127,10 +163,10 @@ public final class EdgeToEdge {
                 cutoutBottom = cutout.getSafeInsetBottom();
             }
         }
-        return computeEffectiveInsets(
-                sysLeft, sysTop, sysRight, sysBottom,
+        return computeLegacyInsets(
+                sysLeft, sysTop, sysRight, sysBottom, stableBottom,
                 cutoutLeft, cutoutTop, cutoutRight, cutoutBottom,
-                0);
+                imeThresholdPx);
     }
 
     /** Marks system insets as consumed on all supported API levels. */
@@ -141,6 +177,37 @@ public final class EdgeToEdge {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             return WindowInsets.CONSUMED;
+        }
+        return insets.consumeSystemWindowInsets();
+    }
+
+    /**
+     * Forwards system bar and cutout safe-area insets to the WebView subtree while
+     * stripping IME insets already handled by the native container (and bottom nav
+     * inset when the native extra-keys bar occupies the bottom edge).
+     */
+    @SuppressWarnings("deprecation")
+    public static WindowInsets passSafeAreasConsumeIme(WindowInsets insets, boolean consumeBottomNav) {
+        if (insets == null) {
+            return null;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsets.Builder builder = new WindowInsets.Builder(insets);
+            builder.setInsets(WindowInsets.Type.ime(), Insets.NONE);
+            builder.setVisible(WindowInsets.Type.ime(), false);
+            if (consumeBottomNav) {
+                Insets nav = insets.getInsets(WindowInsets.Type.navigationBars());
+                if (nav.bottom > 0) {
+                    builder.setInsets(WindowInsets.Type.navigationBars(),
+                            Insets.of(nav.left, nav.top, nav.right, 0));
+                }
+                Insets navIgnoring = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars());
+                if (navIgnoring.bottom > 0) {
+                    builder.setInsetsIgnoringVisibility(WindowInsets.Type.navigationBars(),
+                            Insets.of(navIgnoring.left, navIgnoring.top, navIgnoring.right, 0));
+                }
+            }
+            return builder.build();
         }
         return insets.consumeSystemWindowInsets();
     }

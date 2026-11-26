@@ -23,11 +23,19 @@ function rgbToHex(cssColor) {
 function readSurfaceHex() {
   try {
     if (typeof window.getComputedStyle !== 'function' || !doc) return null;
-    var candidates = [doc.body, doc.getElementById('root'), doc.documentElement];
+    var candidates = [
+      doc.querySelector && doc.querySelector('[data-testid="mobile-layout"]'),
+      doc.querySelector && doc.querySelector('.agy-shell'),
+      doc.querySelector && doc.querySelector('.agy-sheet'),
+      doc.getElementById('root'),
+      doc.body,
+      doc.documentElement
+    ];
     for (var i = 0; i < candidates.length; i++) {
       var el = candidates[i];
       if (!el) continue;
-      var hex = rgbToHex(window.getComputedStyle(el).backgroundColor);
+      var cs = window.getComputedStyle(el);
+      var hex = cs ? rgbToHex(cs.backgroundColor) : null;
       if (hex) return hex;
     }
   } catch (e) { /* ignore */ }

@@ -5,6 +5,7 @@ import android.webkit.WebView;
 
 import com.agy.bridge.AndroidBridge;
 import com.agy.oauth.OAuthManager;
+import com.agy.theme.EdgeToEdge;
 import com.agy.theme.ThemeManager;
 import com.agy.util.CoreUrl;
 
@@ -119,6 +120,11 @@ public final class WebViewHost {
 
     /** Loads our asset UI with the app config injected ahead of every app script. */
     public void loadApp() {
-        AppLoader.load(context, webView, theme, bridge);
+        loadApp(null, false);
+    }
+
+    /** Loads our asset UI with initial safe-area insets and extra-keys state pre-seeded. */
+    public void loadApp(EdgeToEdge.InsetsRect initialInsets, boolean extraKeysVisible) {
+        AppLoader.load(context, webView, theme, bridge, initialInsets, extraKeysVisible);
     }
 }

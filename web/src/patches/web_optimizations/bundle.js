@@ -17,6 +17,12 @@ global.BASE_UI_ANIMATIONS_DISABLED = true;
 var doc = global.document;
 if (!doc) return;
 
+var imeAnimating = false;
+var imeFailsafeTimer = 0;
+var pendingWindowResize = false;
+var pendingResizeObservers = typeof Map === 'function' ? new Map() : null;
+var wrappedResizeListeners = typeof WeakMap === 'function' ? new WeakMap() : null;
+
 var SCROLLBAR_DOC_EVENTS = {
   pointerdown: true,
   pointerup: true,
@@ -30,11 +36,92 @@ var SCROLLBAR_DOC_EVENTS = {
   scroll: true
 };
 
+function isViewportResizeTarget(win, target) {
+  return target === win || (win.visualViewport && target === win.visualViewport);
+}
+
+function flushDeferredResizes(win) {
+  if (pendingWindowResize) {
+    pendingWindowResize = false;
+    try {
+      var ev;
+      if (typeof win.Event === 'function') {
+        ev = new win.Event('resize');
+      } else if (doc && typeof doc.createEvent === 'function') {
+        ev = doc.createEvent('Event');
+        ev.initEvent('resize', false, false);
+      }
+      if (ev && typeof win.dispatchEvent === 'function') {
+        win.dispatchEvent(ev);
+      }
+      if (ev && win.visualViewport && typeof win.visualViewport.dispatchEvent === 'function') {
+        win.visualViewport.dispatchEvent(ev);
+      }
+    } catch (_) {}
+  }
+  if (pendingResizeObservers && pendingResizeObservers.size > 0) {
+    var batch = [];
+    pendingResizeObservers.forEach(function (item) {
+      batch.push(item);
+    });
+    pendingResizeObservers.clear();
+    for (var i = 0; i < batch.length; i++) {
+      var entry = batch[i];
+      try {
+        entry.cb.call(entry.observer, entry.entries, entry.observer);
+      } catch (_) {}
+    }
+  }
+}
+
+global.__agIsImeAnimating = function () {
+  return !!imeAnimating;
+};
+
+global.__agSetImeAnimating = function (active) {
+  var next = !!active;
+  if (imeFailsafeTimer) {
+    clearTimeout(imeFailsafeTimer);
+    imeFailsafeTimer = 0;
+  }
+  if (next) {
+    imeAnimating = true;
+    if (typeof setTimeout === 'function') {
+      imeFailsafeTimer = setTimeout(function () {
+        imeFailsafeTimer = 0;
+        if (imeAnimating) {
+          imeAnimating = false;
+          flushDeferredResizes(global);
+        }
+      }, 450);
+    }
+    return;
+  }
+  imeAnimating = false;
+  flushDeferredResizes(global);
+};
+
+function wrapResizeListener(origListener) {
+  var wrapped = wrappedResizeListeners.get(origListener);
+  if (!wrapped) {
+    wrapped = function () {
+      if (imeAnimating) {
+        pendingWindowResize = true;
+        return;
+      }
+      return origListener.apply(this, arguments);
+    };
+    wrappedResizeListeners.set(origListener, wrapped);
+  }
+  return wrapped;
+}
+
 function installEventOptimizations(win, documentRef) {
   try {
     var proto = win.EventTarget && win.EventTarget.prototype;
     if (!proto || proto.__agPassivePatched) return;
     var origAdd = proto.addEventListener;
+    var origRemove = proto.removeEventListener;
     if (typeof origAdd !== 'function') return;
 
     proto.addEventListener = function (type, listener, options) {
@@ -54,6 +141,9 @@ function installEventOptimizations(win, documentRef) {
             this.getAttribute('data-testid') === 'overlay-scrollbar') {
           return;
         }
+        if (type === 'resize' && wrappedResizeListeners && isViewportResizeTarget(win, this)) {
+          listener = wrapResizeListener(listener);
+        }
       }
 
       if (type === 'scroll') {
@@ -70,7 +160,53 @@ function installEventOptimizations(win, documentRef) {
       }
       return origAdd.call(this, type, listener, options);
     };
+
+    if (typeof origRemove === 'function') {
+      proto.removeEventListener = function (type, listener, options) {
+        if (type === 'resize' && listener && wrappedResizeListeners && isViewportResizeTarget(win, this)) {
+          var wrapped = wrappedResizeListeners.get(listener);
+          if (wrapped) {
+            return origRemove.call(this, type, wrapped, options);
+          }
+        }
+        return origRemove.call(this, type, listener, options);
+      };
+    }
+
     proto.__agPassivePatched = true;
+  } catch (e) {}
+}
+
+function installResizeObserverGate(win) {
+  try {
+    var OrigRO = win.ResizeObserver;
+    if (!OrigRO || OrigRO.__agGated) return;
+
+    var WrappedRO = function (cb) {
+      var roInstance;
+      var wrappedCb = function (entries, observer) {
+        var obs = observer || roInstance;
+        if (imeAnimating && pendingResizeObservers) {
+          pendingResizeObservers.set(obs, { cb: cb, entries: entries, observer: obs });
+          return;
+        }
+        return cb.call(this, entries, obs);
+      };
+      roInstance = new OrigRO(wrappedCb);
+      var origDisconnect = roInstance.disconnect;
+      if (typeof origDisconnect === 'function') {
+        roInstance.disconnect = function () {
+          if (pendingResizeObservers) {
+            pendingResizeObservers.delete(roInstance);
+          }
+          return origDisconnect.apply(this, arguments);
+        };
+      }
+      return roInstance;
+    };
+    WrappedRO.prototype = OrigRO.prototype;
+    WrappedRO.__agGated = true;
+    win.ResizeObserver = WrappedRO;
   } catch (e) {}
 }
 
@@ -224,6 +360,43 @@ function installStyles(documentRef) {
     var style = documentRef.createElement('style');
     style.setAttribute('data-agy', 'web-optimizations');
     style.textContent = [
+      ':root {',
+      '  --agy-safe-top: max(env(safe-area-inset-top, 0px), var(--agy-inset-top, 0px));',
+      '  --agy-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--agy-inset-bottom, 0px));',
+      '  --agy-safe-left: max(env(safe-area-inset-left, 0px), var(--agy-inset-left, 0px));',
+      '  --agy-safe-right: max(env(safe-area-inset-right, 0px), var(--agy-inset-right, 0px));',
+      '}',
+      'html.agy-extra-keys { --agy-safe-bottom: 0px; }',
+      '[data-testid="mobile-layout"] [style*="calc(48px + env(safe-area-inset-top))"] {',
+      '  height: calc(48px + var(--agy-safe-top)) !important;',
+      '  padding-top: var(--agy-safe-top) !important;',
+      '}',
+      '[style*="calc(100% - 48px - env(safe-area-inset-top"] {',
+      '  height: calc(100% - 48px - var(--agy-safe-top)) !important;',
+      '}',
+      '[data-testid="mobile-layout"] {',
+      '  padding-left: var(--agy-safe-left);',
+      '  padding-right: var(--agy-safe-right);',
+      '}',
+      '[data-testid="mobile-layout"]:not(:has([data-testid="agent-input-box"])) {',
+      '  padding-bottom: var(--agy-safe-bottom);',
+      '}',
+      '[data-testid="mobile-layout"] [data-testid="agent-input-box"],',
+      '[data-testid="bottom-sheet"] {',
+      '  padding-bottom: var(--agy-safe-bottom) !important;',
+      '}',
+      '.agy-shell {',
+      '  padding-top: var(--agy-safe-top) !important;',
+      '  padding-left: var(--agy-safe-left);',
+      '  padding-right: var(--agy-safe-right);',
+      '  padding-bottom: var(--agy-safe-bottom);',
+      '}',
+      '.settings-modal-container, .onboarding-shell {',
+      '  padding-top: var(--agy-safe-top);',
+      '  padding-bottom: var(--agy-safe-bottom);',
+      '  padding-left: var(--agy-safe-left);',
+      '  padding-right: var(--agy-safe-right);',
+      '}',
       '*, *::before, *::after { -webkit-tap-highlight-color: transparent; }',
       'button, a, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="option"], [role="tab"], input, select, textarea {',
       '  touch-action: manipulation;',
@@ -335,6 +508,7 @@ function installStyles(documentRef) {
 }
 
 installEventOptimizations(global, doc);
+installResizeObserverGate(global);
 installFocusGuard(global, doc);
 installLazyAudioGate(global);
 installStyles(doc);

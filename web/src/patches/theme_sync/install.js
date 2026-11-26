@@ -27,6 +27,13 @@ function install() {
         doc.addEventListener('DOMContentLoaded', function () {
           observeBody();
           notify();
+          if (typeof setTimeout === 'function') {
+            if (state.surfaceSyncTimer) clearTimeout(state.surfaceSyncTimer);
+            state.surfaceSyncTimer = setTimeout(function () {
+              state.surfaceSyncTimer = 0;
+              syncSurfaceColor();
+            }, 400);
+          }
         }, { once: true });
       }
     } catch (e) { /* ignore */ }
@@ -46,4 +53,11 @@ function install() {
   } catch (e) { /* ignore */ }
 
   notify();
+  if (typeof setTimeout === 'function') {
+    if (state.surfaceSyncTimer) clearTimeout(state.surfaceSyncTimer);
+    state.surfaceSyncTimer = setTimeout(function () {
+      state.surfaceSyncTimer = 0;
+      syncSurfaceColor();
+    }, 400);
+  }
 }

@@ -106,11 +106,19 @@ function rgbToHex(cssColor) {
 function readSurfaceHex() {
   try {
     if (typeof window.getComputedStyle !== 'function' || !doc) return null;
-    var candidates = [doc.body, doc.getElementById('root'), doc.documentElement];
+    var candidates = [
+      doc.querySelector && doc.querySelector('[data-testid="mobile-layout"]'),
+      doc.querySelector && doc.querySelector('.agy-shell'),
+      doc.querySelector && doc.querySelector('.agy-sheet'),
+      doc.getElementById('root'),
+      doc.body,
+      doc.documentElement
+    ];
     for (var i = 0; i < candidates.length; i++) {
       var el = candidates[i];
       if (!el) continue;
-      var hex = rgbToHex(window.getComputedStyle(el).backgroundColor);
+      var cs = window.getComputedStyle(el);
+      var hex = cs ? rgbToHex(cs.backgroundColor) : null;
       if (hex) return hex;
     }
   } catch (e) { /* ignore */ }
@@ -199,6 +207,13 @@ function install() {
         doc.addEventListener('DOMContentLoaded', function () {
           observeBody();
           notify();
+          if (typeof setTimeout === 'function') {
+            if (state.surfaceSyncTimer) clearTimeout(state.surfaceSyncTimer);
+            state.surfaceSyncTimer = setTimeout(function () {
+              state.surfaceSyncTimer = 0;
+              syncSurfaceColor();
+            }, 400);
+          }
         }, { once: true });
       }
     } catch (e) { /* ignore */ }
@@ -218,6 +233,13 @@ function install() {
   } catch (e) { /* ignore */ }
 
   notify();
+  if (typeof setTimeout === 'function') {
+    if (state.surfaceSyncTimer) clearTimeout(state.surfaceSyncTimer);
+    state.surfaceSyncTimer = setTimeout(function () {
+      state.surfaceSyncTimer = 0;
+      syncSurfaceColor();
+    }, 400);
+  }
 }
 
 /**

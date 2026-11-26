@@ -27,6 +27,16 @@ public final class AppHtmlInjector {
     }
 
     public static String inject(String html, AndroidBridge bridge, ThemeManager theme) {
+        return inject(html, bridge, theme, 0, 0, 0, 0, false);
+    }
+
+    public static String inject(String html, AndroidBridge bridge, ThemeManager theme,
+                                int topDp, int bottomDp, int leftDp, int rightDp,
+                                boolean extraKeysVisible) {
+        int safeTop = Math.max(0, topDp);
+        int safeBottom = extraKeysVisible ? 0 : Math.max(0, bottomDp);
+        int safeLeft = Math.max(0, leftDp);
+        int safeRight = Math.max(0, rightDp);
         String boot;
         try {
             JSONObject config = new JSONObject(bridge.getConfig());
@@ -35,8 +45,21 @@ public final class AppHtmlInjector {
             endpoints.put("core", base);
             endpoints.put("core_http", base);
             endpoints.put("enginePort", bridge.getEnginePort());
+            String insetStyle = (safeTop > 0 || safeBottom > 0 || safeLeft > 0 || safeRight > 0 || extraKeysVisible)
+                    ? "<style id=\"ag-initial-insets\">:root{"
+                    + "--agy-inset-top:" + safeTop + "px;"
+                    + "--agy-inset-bottom:" + safeBottom + "px;"
+                    + "--agy-inset-left:" + safeLeft + "px;"
+                    + "--agy-inset-right:" + safeRight + "px;"
+                    + "}</style>"
+                    : "";
+            String extraClass = extraKeysVisible
+                    ? "document.documentElement.classList.add('agy-extra-keys');"
+                    : "";
             boot = "<meta http-equiv=\"Content-Security-Policy\" content=\"" + CSP + "\">"
+                    + insetStyle
                     + "<script>(function(){"
+                    + extraClass
                     + "window.__APP_CONFIG__=" + config.toString() + ";"
                     + "window.__AG_ENDPOINTS__=" + endpoints.toString() + ";"
                     + "window.__AG_CSRF__=" + JSONObject.quote(bridge.getCsrfToken()) + ";"

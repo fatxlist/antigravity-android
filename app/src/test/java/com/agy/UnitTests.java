@@ -1,5 +1,6 @@
 package com.agy;
 
+import com.agy.core.CoreEventWatcher;
 import com.agy.gateway.SystemGatewayServer;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
@@ -162,6 +163,53 @@ public final class UnitTests {
         check("effective navBottom with bottom cutout", imeOpen.navBottom == 48);
         check("effective bottom uses IME when larger", imeOpen.bottom == 840);
         check("effective imeBottom preserved", imeOpen.imeBottom == 840);
+
+        check("ime bottom padding when IME closed",
+                EdgeToEdge.computeImeBottomPadding(0, 48) == 0);
+        check("ime bottom padding when IME <= navBottom",
+                EdgeToEdge.computeImeBottomPadding(40, 48) == 0);
+        check("ime bottom padding subtracts navBottom",
+                EdgeToEdge.computeImeBottomPadding(840, 48) == 792);
+        check("ime bottom padding with zero navBottom",
+                EdgeToEdge.computeImeBottomPadding(600, 0) == 600);
+
+        EdgeToEdge.InsetsRect legacyNav = EdgeToEdge.computeLegacyInsets(
+                0, 84, 0, 48, 48,
+                0, 84, 0, 0,
+                300);
+        check("legacy nav only sysBottom stays navBottom", legacyNav.navBottom == 48);
+        check("legacy nav only imeBottom is zero", legacyNav.imeBottom == 0);
+
+        EdgeToEdge.InsetsRect legacyIme = EdgeToEdge.computeLegacyInsets(
+                0, 84, 0, 880, 48,
+                0, 84, 0, 0,
+                300);
+        check("legacy IME preserves stable navBottom", legacyIme.navBottom == 48);
+        check("legacy IME exposes full imeBottom", legacyIme.imeBottom == 880);
+        check("legacy IME top cutout preserved", legacyIme.top == 84);
+    }
+
+    private static void testCoreEventWatcherFatalFilter() {
+        check("ignore lse_compat INIT SIGILL handler line",
+                !CoreEventWatcher.isFatalErrorLine("[lse_compat] INIT: installing kernel SIGILL handler"));
+        check("ignore timestamped lse_compat INIT line",
+                !CoreEventWatcher.isFatalErrorLine("2026/11/26 [lse_compat] INIT: installing kernel SIGILL handler"));
+        check("ignore lse_compat SUCCESS SIGILL handler line",
+                !CoreEventWatcher.isFatalErrorLine("[lse_compat] SUCCESS: SIGILL handler active in Linux kernel"));
+        check("flag lse_compat FATAL unhandled SIGILL",
+                CoreEventWatcher.isFatalErrorLine("[lse_compat] FATAL: unhandled SIGILL at PC=0x1234"));
+        check("flag lse_compat ERROR raw_rt_sigaction",
+                CoreEventWatcher.isFatalErrorLine("[lse_compat] ERROR: raw_rt_sigaction failed with code: -22"));
+        check("flag panic line",
+                CoreEventWatcher.isFatalErrorLine("panic: runtime error: invalid memory address"));
+        check("flag fatal error line",
+                CoreEventWatcher.isFatalErrorLine("fatal error: all goroutines are asleep - deadlock!"));
+        check("flag SIGSEGV crash line",
+                CoreEventWatcher.isFatalErrorLine("SIGSEGV: segmentation violation"));
+        check("flag bare SIGILL crash line",
+                CoreEventWatcher.isFatalErrorLine("Program received signal SIGILL at 0xdeadbeef"));
+        check("ignore null or empty",
+                !CoreEventWatcher.isFatalErrorLine(null) && !CoreEventWatcher.isFatalErrorLine(""));
     }
 
     private static void testRequestCodeUniqueness() {
@@ -203,6 +251,7 @@ public final class UnitTests {
         testDocumentsContractHelper();
         testOnboardingSeederUuid();
         testEdgeToEdge();
+        testCoreEventWatcherFatalFilter();
         testRequestCodeUniqueness();
         testThemeColors();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");

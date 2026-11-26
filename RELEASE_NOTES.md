@@ -1,4 +1,4 @@
-# Antigravity for Android v2.5.0
+# Antigravity for Android v2.5.1
 
 ## Спецификация пакетов релиза
 
@@ -8,11 +8,23 @@
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
 
 > [!NOTE]
-> Сборка `antigravity.apk` для релиза `v2.5.0` выполнена в GitHub Actions с флагом `--allow-debug-sign`, так как релизные секреты подписи `AGY_RELEASE_*` ещё не добавлены в GitHub Secrets репозитория.
+> Сборка `antigravity.apk` для релиза `v2.5.1` выполнена в GitHub Actions с флагом `--allow-debug-sign`, так как релизные секреты подписи `AGY_RELEASE_*` ещё не добавлены в GitHub Secrets репозитория.
 
 ---
 
-## Изменения и исправления (v2.5.0)
+## Изменения и исправления (v2.5.1)
+
+* **Устранена ложная ошибка `Antigravity Core Error` (`[lse_compat] INIT: installing kernel SIGILL handler`):** в `CoreEventWatcher.isFatalErrorLine()` диагностические сообщения инициализации `liblse_compat.so` (`INIT:` / `SUCCESS:`) отделены от реальных падений (`FATAL:`, `ERROR:`, `panic:`, `fatal error:`, `SIGSEGV`, необработанный `SIGILL`).
+* **Настоящий full-bleed Edge-to-Edge без чёрных полос сверху и снизу:**
+  * Убраны внешние системные отступы у `contentColumn`; системные инсеты (`systemBars | displayCutout`) передаются в `WebView` через `EdgeToEdge.passSafeAreasConsumeIme()`, а начальные CSS-переменные `--agy-inset-*` и `agy-extra-keys` предзагружаются в `<head>` (`AppHtmlInjector` / `AppLoader`) до первого кадра.
+  * Унифицированы safe-area отступы в web-слое (`web_optimizations/bundle.js`, `mobile_bridge/controls.js`), выровнен базовый `--bg-main` в `web/index.html` (`#101010`), улучшена синхронизация живого цвета поверхности (`theme_sync` / `MainActivity`) и добавлен `android:resizeableActivity="true"`.
+* **Плавная анимация клавиатуры (IME):**
+  * Удалён постоянный `LAYER_TYPE_HARDWARE` с полноэкранного `WebView` (`WebViewFactory`), устранявший переаллокацию GPU FBO на каждом кадре ресайза.
+  * `ImeInsetsAnimator` координирует `OnApplyWindowInsetsListener` и `WindowInsetsAnimation.Callback` (`onPrepare` + `DISPATCH_MODE_STOP`), исключая скачок до старта и отскок `requestApplyInsets()` в конце, а `web_optimizations` приостанавливает шторм `window.resize` / `ResizeObserver` и `--agy-vvh` на время анимации.
+
+---
+
+## Предыдущие изменения (v2.5.0)
 
 ### 1. Полноэкранный режим Edge-to-Edge (API 24–36)
 * Добавлен нативный helper `EdgeToEdge` и обновлены `ActivityPainter`, версионированные стили `values-v27`..`values-v30` и темы системного сплэша (`SplashThemeDark` / `SplashThemeLight`): прозрачные status bar и navigation bar (на API 24–25 в светлой теме используется защитный скрим `LEGACY_LIGHT_SCRIM`), отключение системного контраста на API 29+, расширение под вырезы экрана (`shortEdges` / `always`) и корректное переключение полярности иконок.

@@ -95,7 +95,11 @@ public class MainActivity extends Activity
     private VoiceDictationController voiceDictation;
     private VoiceForegroundService.StateListener voiceServiceStateListener;
 
+    private Integer liveSurfaceColor;
+    private int appliedImeBottomPadding = 0;
+    private String lastPushedSafeAreaKey;
     private boolean appLoaded = false;
+    private boolean pageFinished = false;
     private boolean uiReady = false;
     private boolean activityResumed = false;
     private int loadedGeneration = -1;
@@ -143,13 +147,15 @@ public class MainActivity extends Activity
             int generation = CoreRuntimeState.readyGeneration;
             if (!appLoaded || (loadedGeneration > 0 && generation != loadedGeneration)) {
                 appLoaded = true;
+                pageFinished = false;
                 uiReady = false;
                 loadedGeneration = generation;
                 splash.clearFatal();
                 if (generation > 1) {
                     splash.showLoading();
                 }
-                webViewHost.loadApp();
+                boolean extraVisible = extraKeysBar != null && extraKeysBar.getVisibility() == View.VISIBLE;
+                webViewHost.loadApp(lastInsets, extraVisible);
                 handler.removeCallbacks(splashWatchdog);
                 handler.postDelayed(splashWatchdog, 10000);
             }
@@ -173,6 +179,7 @@ public class MainActivity extends Activity
         themeManager.setThemeChangeListener(new com.agy.theme.ThemeController.ThemeChangeListener() {
             @Override
             public void onThemeApplied(boolean dark) {
+                liveSurfaceColor = null;
                 if (rootLayout != null) {
                     rootLayout.setBackgroundColor(dark
                             ? com.agy.theme.ThemeColors.COLOR_DARK
@@ -194,12 +201,17 @@ public class MainActivity extends Activity
         webViewHost.setListener(this);
 
         rootLayout = new FrameLayout(this);
+        rootLayout.setFitsSystemWindows(false);
         rootLayout.setBackgroundColor(themeManager.getBackgroundColor());
         setContentView(rootLayout);
+        EdgeToEdge.enable(getWindow(), isCurrentSurfaceDark());
 
         contentColumn = new LinearLayout(this);
         contentColumn.setOrientation(LinearLayout.VERTICAL);
-        contentColumn.addView(webViewHost.getWebView(),
+        contentColumn.setFitsSystemWindows(false);
+        WebView mainWebView = webViewHost.getWebView();
+        mainWebView.setFitsSystemWindows(false);
+        contentColumn.addView(mainWebView,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
@@ -222,32 +234,59 @@ public class MainActivity extends Activity
         contentColumn.addView(extraKeysBar,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        contentColumn.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
-            @Override
-            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
-                EdgeToEdge.InsetsRect r = EdgeToEdge.resolveInsets(insets);
-                lastInsets = r;
-                applyContentInsets(r);
-                pushSafeAreaInsetsToJs(r);
-                return EdgeToEdge.consumeSystemInsets(insets);
-            }
-        });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             ImeInsetsAnimator.install(contentColumn, new ImeInsetsAnimator.Listener() {
                 @Override
-                public void onImeProgress(EdgeToEdge.InsetsRect r) {
+                public WindowInsets onApplyInsets(WindowInsets rawInsets,
+                                                  EdgeToEdge.InsetsRect r,
+                                                  boolean deferringIme) {
                     lastInsets = r;
-                    applyContentInsets(r);
+                    boolean extraVisible = extraKeysBar != null
+                            && extraKeysBar.getVisibility() == View.VISIBLE;
+                    if (extraKeysBar != null) {
+                        extraKeysBar.setBottomInset(extraVisible ? r.navBottom : 0);
+                    }
+                    if (!deferringIme) {
+                        applyImeBottomPadding(r.imeBottom, r.navBottom);
+                    }
+                    pushSafeAreaInsetsToJs(r, false);
+                    return EdgeToEdge.passSafeAreasConsumeIme(rawInsets, extraVisible);
                 }
 
                 @Override
-                public void onImeEnd() {
-                    if (lastInsets != null) {
-                        pushSafeAreaInsetsToJs(lastInsets);
+                public void onImeAnimationStart() {
+                    setWebImeAnimating(true);
+                }
+
+                @Override
+                public void onImeAnimationProgress(int imeBottomPx, int navBottomPx) {
+                    applyImeBottomPadding(imeBottomPx, navBottomPx);
+                }
+
+                @Override
+                public void onImeAnimationEnd(EdgeToEdge.InsetsRect finalInsets) {
+                    if (finalInsets != null) {
+                        lastInsets = finalInsets;
+                        applyImeBottomPadding(finalInsets.imeBottom, finalInsets.navBottom);
                     }
-                    if (contentColumn != null) {
-                        contentColumn.requestApplyInsets();
+                    setWebImeAnimating(false);
+                }
+            });
+        } else {
+            final int imeThresholdPx = Math.round(100f * getResources().getDisplayMetrics().density);
+            contentColumn.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                    EdgeToEdge.InsetsRect r = EdgeToEdge.resolveInsets(insets, imeThresholdPx);
+                    lastInsets = r;
+                    boolean extraVisible = extraKeysBar != null
+                            && extraKeysBar.getVisibility() == View.VISIBLE;
+                    if (extraKeysBar != null) {
+                        extraKeysBar.setBottomInset(extraVisible ? r.navBottom : 0);
                     }
+                    applyImeBottomPadding(r.imeBottom, r.navBottom);
+                    pushSafeAreaInsetsToJs(r, false);
+                    return EdgeToEdge.passSafeAreasConsumeIme(insets, extraVisible);
                 }
             });
         }
@@ -314,6 +353,7 @@ public class MainActivity extends Activity
         handler.removeCallbacks(splashWatchdog);
         splash.clearFatal();
         appLoaded = false;
+        pageFinished = false;
         uiReady = false;
         loadedGeneration = -1;
         splashDeadline = System.currentTimeMillis() + SPLASH_TIMEOUT_MS;
@@ -337,6 +377,10 @@ public class MainActivity extends Activity
     @Override
     public void onPageFinished(String url) {
         Log.i(TAG, "onPageFinished " + SensitiveDataRedactor.safeUrl(url));
+        pageFinished = true;
+        if (lastInsets != null) {
+            pushSafeAreaInsetsToJs(lastInsets, true);
+        }
     }
 
     /** Idempotent; called by AndroidBridge.onUiReady() on the main thread. */
@@ -354,7 +398,7 @@ public class MainActivity extends Activity
         uiReady = true;
         flushPendingSharedPayloads();
         if (lastInsets != null) {
-            pushSafeAreaInsetsToJs(lastInsets);
+            pushSafeAreaInsetsToJs(lastInsets, true);
         }
         if (VoiceForegroundService.isActive()) {
             notifyVoiceServiceStateChanged(true, VoiceForegroundService.isMuted());
@@ -367,35 +411,44 @@ public class MainActivity extends Activity
             if (!visible) {
                 extraKeysBar.resetStickyModifiers();
                 extraKeysBar.setBottomInset(0);
+            } else if (lastInsets != null) {
+                extraKeysBar.setBottomInset(lastInsets.navBottom);
             }
         }
         if (lastInsets != null) {
-            applyContentInsets(lastInsets);
+            applyImeBottomPadding(lastInsets.imeBottom, lastInsets.navBottom);
+            pushSafeAreaInsetsToJs(lastInsets, true);
         }
         if (contentColumn != null) {
             contentColumn.requestApplyInsets();
         }
     }
 
-    private void applyContentInsets(EdgeToEdge.InsetsRect r) {
-        if (r == null || contentColumn == null) {
+    private void applyImeBottomPadding(int imeBottomPx, int navBottomPx) {
+        if (contentColumn == null) {
             return;
         }
-        boolean extraVisible = extraKeysBar != null && extraKeysBar.getVisibility() == View.VISIBLE;
-        boolean imeOpen = r.imeBottom > r.navBottom;
-        if (extraVisible && !imeOpen) {
-            contentColumn.setPadding(r.left, r.top, r.right, 0);
-            extraKeysBar.setBottomInset(r.navBottom);
-        } else {
-            contentColumn.setPadding(r.left, r.top, r.right, r.bottom);
-            if (extraKeysBar != null) {
-                extraKeysBar.setBottomInset(0);
-            }
+        int pad = EdgeToEdge.computeImeBottomPadding(imeBottomPx, navBottomPx);
+        if (pad != appliedImeBottomPadding) {
+            appliedImeBottomPadding = pad;
+            contentColumn.setPadding(0, 0, 0, pad);
         }
     }
 
-    private void pushSafeAreaInsetsToJs(EdgeToEdge.InsetsRect r) {
-        if (!uiReady || r == null || webViewHost == null) {
+    private void setWebImeAnimating(boolean active) {
+        if (!uiReady || webViewHost == null) {
+            return;
+        }
+        WebView wv = webViewHost.getWebView();
+        if (wv == null) {
+            return;
+        }
+        wv.evaluateJavascript("window.__agSetImeAnimating&&window.__agSetImeAnimating("
+                + (active ? "true" : "false") + ");", null);
+    }
+
+    private void pushSafeAreaInsetsToJs(EdgeToEdge.InsetsRect r, boolean force) {
+        if ((!uiReady && !pageFinished) || r == null || webViewHost == null) {
             return;
         }
         WebView wv = webViewHost.getWebView();
@@ -406,17 +459,22 @@ public class MainActivity extends Activity
         if (density <= 0f) {
             density = 1f;
         }
-        int topDp = Math.round(r.top / density);
-        int bottomDp = Math.round(r.bottom / density);
-        int leftDp = Math.round(r.left / density);
-        int rightDp = Math.round(r.right / density);
-        int imeDp = Math.round(r.imeBottom / density);
+        boolean extraVisible = extraKeysBar != null && extraKeysBar.getVisibility() == View.VISIBLE;
+        int topDp = (int) Math.ceil(r.top / density);
+        int bottomDp = extraVisible ? 0 : (int) Math.ceil(r.navBottom / density);
+        int leftDp = (int) Math.ceil(r.left / density);
+        int rightDp = (int) Math.ceil(r.right / density);
+        String key = topDp + ":" + bottomDp + ":" + leftDp + ":" + rightDp + ":" + extraVisible;
+        if (!force && key.equals(lastPushedSafeAreaKey)) {
+            return;
+        }
+        lastPushedSafeAreaKey = key;
         String js = "(function(d){if(!d)return;var s=d.style;"
                 + "s.setProperty('--agy-inset-top','" + topDp + "px');"
                 + "s.setProperty('--agy-inset-bottom','" + bottomDp + "px');"
                 + "s.setProperty('--agy-inset-left','" + leftDp + "px');"
                 + "s.setProperty('--agy-inset-right','" + rightDp + "px');"
-                + "s.setProperty('--agy-ime-bottom','" + imeDp + "px');"
+                + "d.classList.toggle('agy-extra-keys'," + (extraVisible ? "true" : "false") + ");"
                 + "})(document.documentElement);";
         wv.evaluateJavascript(js, null);
     }
@@ -750,10 +808,36 @@ public class MainActivity extends Activity
                 REQUEST_POST_NOTIFICATIONS);
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            EdgeToEdge.enable(getWindow(), isCurrentSurfaceDark());
+        }
+    }
+
+    private boolean isCurrentSurfaceDark() {
+        if (liveSurfaceColor != null) {
+            return ThemeColors.isDarkColor(liveSurfaceColor.intValue());
+        }
+        return themeManager == null || themeManager.isDark();
+    }
+
     private void refreshTheme() {
+        if (themeManager != null && liveSurfaceColor != null) {
+            boolean liveDark = ThemeColors.isDarkColor(liveSurfaceColor.intValue());
+            if (liveDark != themeManager.isDark()) {
+                liveSurfaceColor = null;
+            }
+        }
         ThemeRefresher.refresh(this, themeManager, rootLayout, splash, webViewHost);
+        if (liveSurfaceColor != null) {
+            applySurfaceColor(liveSurfaceColor.intValue());
+        } else {
+            EdgeToEdge.enable(getWindow(), isCurrentSurfaceDark());
+        }
         if (extraKeysBar != null && themeManager != null) {
-            extraKeysBar.applyTheme(themeManager.isDark());
+            extraKeysBar.applyTheme(isCurrentSurfaceDark());
         }
         if (themeManager != null) {
             com.agy.theme.LauncherIconSwitcher.scheduleSwitch(themeManager.isDark());
@@ -767,9 +851,13 @@ public class MainActivity extends Activity
 
     /** Applies a live surface color reported by the web UI across root view, bars, and extra keys. */
     public void applySurfaceColor(int color) {
+        liveSurfaceColor = color;
         com.agy.theme.ActivityPainter.applySurfaceColor(this, color);
         if (rootLayout != null) {
             rootLayout.setBackgroundColor(color);
+        }
+        if (webViewHost != null && webViewHost.getWebView() != null) {
+            webViewHost.getWebView().setBackgroundColor(color);
         }
         if (extraKeysBar != null) {
             extraKeysBar.applyTheme(ThemeColors.isDarkColor(color));

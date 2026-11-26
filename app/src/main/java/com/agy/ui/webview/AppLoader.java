@@ -5,6 +5,7 @@ import android.util.Log;
 import android.webkit.WebView;
 
 import com.agy.bridge.AndroidBridge;
+import com.agy.theme.EdgeToEdge;
 import com.agy.theme.ThemeManager;
 import com.agy.util.AssetReader;
 
@@ -23,6 +24,12 @@ public final class AppLoader {
 
     public static void load(Context context, WebView webView, ThemeManager theme,
                             AndroidBridge bridge) {
+        load(context, webView, theme, bridge, null, false);
+    }
+
+    public static void load(Context context, WebView webView, ThemeManager theme,
+                            AndroidBridge bridge, EdgeToEdge.InsetsRect initialInsets,
+                            boolean extraKeysVisible) {
         String html = AssetReader.readString(context, APP_ASSET);
         if (html == null) {
             Log.e(TAG, "cannot read " + APP_ASSET + "; UI not loaded");
@@ -43,9 +50,24 @@ public final class AppLoader {
         } else {
             hostTheme = "system";
         }
+        int topDp = 0;
+        int bottomDp = 0;
+        int leftDp = 0;
+        int rightDp = 0;
+        if (initialInsets != null && context != null) {
+            float density = context.getResources().getDisplayMetrics().density;
+            if (density <= 0f) {
+                density = 1f;
+            }
+            topDp = (int) Math.ceil(initialInsets.top / density);
+            bottomDp = extraKeysVisible ? 0 : (int) Math.ceil(initialInsets.navBottom / density);
+            leftDp = (int) Math.ceil(initialInsets.left / density);
+            rightDp = (int) Math.ceil(initialInsets.right / density);
+        }
         String origin = "https://127.0.0.1:" + port + "/";
         String historyUrl = origin + "?hostTheme=" + hostTheme;
-        webView.loadDataWithBaseURL(origin, AppHtmlInjector.inject(html, bridge, theme),
+        webView.loadDataWithBaseURL(origin,
+                AppHtmlInjector.inject(html, bridge, theme, topDp, bottomDp, leftDp, rightDp, extraKeysVisible),
                 "text/html", "UTF-8", historyUrl);
     }
 }
