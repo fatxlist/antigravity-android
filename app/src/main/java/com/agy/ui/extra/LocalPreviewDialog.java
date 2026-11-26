@@ -17,6 +17,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
@@ -24,10 +25,12 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import com.agy.theme.EdgeToEdge;
 import com.agy.util.SensitiveDataRedactor;
 
 /**
@@ -59,11 +62,13 @@ public final class LocalPreviewDialog extends Dialog {
         root.setBackgroundColor(bgColor);
 
         // Toolbar
-        LinearLayout toolbar = new LinearLayout(activity);
+        final int baseH = dp(activity, 8);
+        final int baseV = dp(activity, 6);
+        final LinearLayout toolbar = new LinearLayout(activity);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setBackgroundColor(barBg);
-        toolbar.setPadding(dp(activity, 8), dp(activity, 6), dp(activity, 8), dp(activity, 6));
+        toolbar.setPadding(baseH, baseV, baseH, baseV);
         root.addView(toolbar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -105,6 +110,8 @@ public final class LocalPreviewDialog extends Dialog {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 1)));
 
         // Isolated WebView (strictly NO addJavascriptInterface)
+        final FrameLayout webContainer = new FrameLayout(activity);
+        webContainer.setBackgroundColor(bgColor);
         previewWebView = new WebView(activity);
         previewWebView.setBackgroundColor(bgColor);
         configureIsolatedSettings(previewWebView);
@@ -120,7 +127,9 @@ public final class LocalPreviewDialog extends Dialog {
                 }
             }
         });
-        root.addView(previewWebView, new LinearLayout.LayoutParams(
+        webContainer.addView(previewWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(webContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
         backBtn.setOnClickListener(new View.OnClickListener() {
@@ -146,6 +155,16 @@ public final class LocalPreviewDialog extends Dialog {
             }
         });
 
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                EdgeToEdge.InsetsRect r = EdgeToEdge.resolveInsets(insets);
+                toolbar.setPadding(baseH + r.left, baseV + r.top, baseH + r.right, baseV);
+                webContainer.setPadding(r.left, 0, r.right, r.bottom);
+                return EdgeToEdge.consumeSystemInsets(insets);
+            }
+        });
+
         setContentView(root, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -153,10 +172,9 @@ public final class LocalPreviewDialog extends Dialog {
         if (window != null) {
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT);
-            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-            window.setStatusBarColor(barBg);
-            window.setNavigationBarColor(bgColor);
+            EdgeToEdge.enable(window, darkTheme);
         }
+        root.requestApplyInsets();
 
         setOnKeyListener(new OnKeyListener() {
             @Override

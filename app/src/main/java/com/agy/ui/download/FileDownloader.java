@@ -523,12 +523,15 @@ public final class FileDownloader {
 
     private static void downloadDirect(final Activity activity, final String fileUrl,
                                        final String contentDisposition, final String mimeType) {
+        final Context appContext = activity.getApplicationContext();
         new Thread(new Runnable() {
             @Override
             public void run() {
+                HttpURLConnection conn = null;
+                File target = null;
                 try {
                     URL u = new URL(fileUrl);
-                    HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                    conn = (HttpURLConnection) u.openConnection();
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(30000);
                     conn.setRequestProperty("User-Agent", "Mozilla/5.0 Antigravity");
@@ -556,7 +559,7 @@ public final class FileDownloader {
                         throw new IOException("cannot create Downloads directory");
                     }
 
-                    File target = getSafeUniqueFile(downloadsDir, fileName);
+                    target = getSafeUniqueFile(downloadsDir, fileName);
 
                     try (InputStream in = conn.getInputStream();
                          OutputStream out = new FileOutputStream(target)) {
@@ -569,23 +572,28 @@ public final class FileDownloader {
                     }
 
                     final File savedFile = target;
-                    MediaScannerConnection.scanFile(activity, new String[]{savedFile.getAbsolutePath()}, null, null);
+                    MediaScannerConnection.scanFile(appContext, new String[]{savedFile.getAbsolutePath()}, null, null);
 
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(activity, "Saved to Downloads: " + savedFile.getName(), Toast.LENGTH_LONG).show();
+                            Toast.makeText(appContext, "Saved to Downloads: " + savedFile.getName(), Toast.LENGTH_LONG).show();
                         }
                     });
                     Log.i(TAG, "Direct download saved: " + savedFile.getAbsolutePath());
                 } catch (final Exception e) {
+                    safeDelete(target);
                     Log.e(TAG, "Direct download failed", e);
                     new Handler(Looper.getMainLooper()).post(new Runnable() {
                         @Override
                         public void run() {
-                            Toast.makeText(activity, "Download failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(appContext, "Download failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                         }
                     });
+                } finally {
+                    if (conn != null) {
+                        conn.disconnect();
+                    }
                 }
             }
         }).start();

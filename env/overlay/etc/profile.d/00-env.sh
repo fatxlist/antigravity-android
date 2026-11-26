@@ -2,6 +2,21 @@
 export HOME="${HOME:-$(dirname "$PREFIX")}"
 export TMPDIR="$PREFIX/tmp"
 export PATH="$PREFIX/bin:/system/bin:${PATH:-}"
+if [ -z "${JAVA_HOME:-}" ]; then
+    for _agy_jvm in "$PREFIX/lib/jvm/java-17-openjdk" "$PREFIX/lib/jvm/java-21-openjdk" "$PREFIX/lib/jvm"/java-*-openjdk; do
+        if [ -x "$_agy_jvm/bin/java" ]; then
+            export JAVA_HOME="$_agy_jvm"
+            break
+        fi
+    done
+    unset _agy_jvm
+fi
+if [ -n "${JAVA_HOME:-}" ] && [ -d "$JAVA_HOME/bin" ]; then
+    case ":$PATH:" in
+        *":$JAVA_HOME/bin:"*) ;;
+        *) export PATH="$PATH:$JAVA_HOME/bin" ;;
+    esac
+fi
 export LD_LIBRARY_PATH="$PREFIX/lib"
 if [ -f "$PREFIX/lib/liblse_compat.so" ]; then
     export LD_PRELOAD="$PREFIX/lib/liblse_compat.so:$PREFIX/lib/libtermux-exec.so"

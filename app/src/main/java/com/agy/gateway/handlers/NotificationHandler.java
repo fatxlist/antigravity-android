@@ -11,6 +11,7 @@ import android.os.Build;
 import android.util.Log;
 
 import com.agy.core.ApprovalActionReceiver;
+import com.agy.util.HostActivityResolver;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -258,10 +259,7 @@ public final class NotificationHandler {
                     ? new Notification.Builder(context, channel)
                     : new Notification.Builder(context);
 
-            Intent openIntent = new Intent(context, com.agy.ui.MainActivity.class);
-            openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            Intent openIntent = HostActivityResolver.createOpenIntent(context);
             int contentPiFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 contentPiFlags |= PendingIntent.FLAG_IMMUTABLE;

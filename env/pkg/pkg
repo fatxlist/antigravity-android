@@ -78,6 +78,26 @@ install_one() {
         rewrite_prefix "$PREFIX"
         printf '' | db_put "$name" "$ver" "$arch"
     fi
+    # Expose core OpenJDK tools directly in $PREFIX/bin so apksigner and build
+    # scripts resolve java/javac/keytool even outside login shells.
+    if [ -n "$pkg_files" ]; then
+        local jvm_p jvm_tool jvm_target
+        while IFS= read -r jvm_p; do
+            case "$jvm_p" in
+                lib/jvm/java-*-openjdk/bin/*)
+                    jvm_tool="${jvm_p##*/}"
+                    case "$jvm_tool" in
+                        java|javac|jar|jarsigner|javap|javadoc|keytool|jps)
+                            jvm_target="$PREFIX/$jvm_p"
+                            if [ -x "$jvm_target" ] && [ ! -e "$PREFIX/bin/$jvm_tool" ]; then
+                                ln -sf "$jvm_target" "$PREFIX/bin/$jvm_tool" 2>/dev/null || true
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+        done <<< "$pkg_files"
+    fi
     # Auto-generate runtime bridge only for newly installed binaries in this package
     local runtime_bin="$PREFIX/../runtime/bin"
     if [ -d "$runtime_bin" ] && [ -n "$pkg_files" ]; then

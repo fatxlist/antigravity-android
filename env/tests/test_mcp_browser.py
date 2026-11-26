@@ -151,6 +151,8 @@ class TestMcpBrowserServer(unittest.TestCase):
         env["HOME"] = self.home_dir
         env["PREFIX"] = self.prefix_dir
         env.pop("AGY_GATEWAY_PORT", None)
+        env.pop("AGY_GATEWAY_TOKEN", None)
+        env.pop("AGY_GATEWAY_TOKEN_FILE", None)
 
         self.proc = subprocess.Popen(
             [sys.executable, "-B", BROWSER_MCP_SCRIPT],

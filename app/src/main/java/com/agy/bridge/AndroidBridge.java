@@ -104,6 +104,29 @@ public final class AndroidBridge {
         return themeBridge.getTheme();
     }
 
+    /** Updates the native activity surface and bar polarity to match the live web surface color. */
+    @JavascriptInterface
+    public boolean setSurfaceColor(String token, final String hexColor) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        final Integer parsed = com.agy.theme.ThemeColors.parseHexColor(hexColor);
+        if (parsed == null) {
+            return false;
+        }
+        final MainActivity act = activityRef != null ? activityRef.get() : MainActivity.activeActivity;
+        if (act == null) {
+            return false;
+        }
+        act.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                act.applySurfaceColor(parsed.intValue());
+            }
+        });
+        return true;
+    }
+
     @JavascriptInterface
     public boolean isDesktopMode() {
         return ui.isDesktopMode();

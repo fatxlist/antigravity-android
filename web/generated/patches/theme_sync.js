@@ -26,6 +26,8 @@ var state = {
   installed: false,
   last: null,
   lastFromBody: null,
+  lastSurfaceHex: null,
+  surfaceSyncTimer: 0,
   notifications: 0,
   observer: null,
   storageBound: false,
@@ -80,8 +82,53 @@ function updateColorSchemeMeta(theme) {
 }
 
 /**
- * patches/theme_sync/notify.js - sync DOM classes, color-scheme, and native Android.
+ * patches/theme_sync/notify.js - sync DOM classes, color-scheme, surface color, and native Android.
  */
+function rgbToHex(cssColor) {
+  if (!cssColor || typeof cssColor !== 'string') return null;
+  var s = cssColor.trim().toLowerCase();
+  if (!s || s === 'transparent') return null;
+  if (/^#[0-9a-f]{6}$/.test(s)) return s;
+  if (/^#[0-9a-f]{3}$/.test(s)) {
+    return '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  }
+  var m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9.]+))?\s*\)$/.exec(s);
+  if (!m) return null;
+  if (m[4] !== undefined && parseFloat(m[4]) < 0.9) return null;
+  function toHex2(n) {
+    var v = Math.max(0, Math.min(255, parseInt(n, 10) || 0));
+    var h = v.toString(16);
+    return h.length < 2 ? '0' + h : h;
+  }
+  return '#' + toHex2(m[1]) + toHex2(m[2]) + toHex2(m[3]);
+}
+
+function readSurfaceHex() {
+  try {
+    if (typeof window.getComputedStyle !== 'function' || !doc) return null;
+    var candidates = [doc.body, doc.getElementById('root'), doc.documentElement];
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (!el) continue;
+      var hex = rgbToHex(window.getComputedStyle(el).backgroundColor);
+      if (hex) return hex;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+function syncSurfaceColor() {
+  try {
+    var hex = readSurfaceHex();
+    if (hex && hex !== state.lastSurfaceHex
+        && window.Android && typeof window.Android.setSurfaceColor === 'function'
+        && window.__AG_NATIVE_BRIDGE_TOKEN__) {
+      state.lastSurfaceHex = hex;
+      window.Android.setSurfaceColor(window.__AG_NATIVE_BRIDGE_TOKEN__, hex);
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function notify() {
   var bodyTheme = fromClassList();
   var theme = resolveTheme();
@@ -115,6 +162,9 @@ function notify() {
       if (typeof window.Android.onVisualThemeChanged === 'function') {
         window.Android.onVisualThemeChanged(theme);
       }
+      syncSurfaceColor();
+      if (state.surfaceSyncTimer) clearTimeout(state.surfaceSyncTimer);
+      state.surfaceSyncTimer = setTimeout(syncSurfaceColor, 150);
     }
   } catch (e) { /* never throw into JS */ }
   return theme;

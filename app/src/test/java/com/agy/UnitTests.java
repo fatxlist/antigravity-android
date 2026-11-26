@@ -3,12 +3,19 @@ package com.agy;
 import com.agy.gateway.SystemGatewayServer;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
+import com.agy.theme.EdgeToEdge;
+import com.agy.theme.ThemeColors;
+import com.agy.ui.MainActivity;
+import com.agy.ui.download.FileDownloader;
+import com.agy.ui.extra.VoiceDictationController;
 import com.agy.util.AppFileProvider;
 import com.agy.util.DocumentsContractHelper;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Pure JVM unit tests for security helpers and path/token logic that do not
@@ -126,12 +133,78 @@ public final class UnitTests {
         checkEquals("already-unique uuid untouched", custom, OnboardingSeeder.replaceTemplateUuid(custom, unique));
     }
 
+    private static void testEdgeToEdge() {
+        check("API 24 light nav scrim",
+                EdgeToEdge.resolveNavigationBarColor(24, false) == EdgeToEdge.LEGACY_LIGHT_SCRIM);
+        check("API 24 dark transparent nav",
+                EdgeToEdge.resolveNavigationBarColor(24, true) == 0);
+        check("API 26 light transparent nav",
+                EdgeToEdge.resolveNavigationBarColor(26, false) == 0);
+        check("API 30 light transparent nav",
+                EdgeToEdge.resolveNavigationBarColor(30, false) == 0);
+
+        EdgeToEdge.InsetsRect imeClosed = EdgeToEdge.computeEffectiveInsets(
+                0, 96, 0, 48,
+                16, 120, 0, 0,
+                0);
+        check("effective left max(sys, cutout)", imeClosed.left == 16);
+        check("effective top max(sys, cutout)", imeClosed.top == 120);
+        check("effective right max(sys, cutout)", imeClosed.right == 0);
+        check("effective navBottom", imeClosed.navBottom == 48);
+        check("effective bottom when IME closed", imeClosed.bottom == 48);
+        check("effective imeBottom when IME closed", imeClosed.imeBottom == 0);
+
+        EdgeToEdge.InsetsRect imeOpen = EdgeToEdge.computeEffectiveInsets(
+                0, 96, 0, 48,
+                0, 0, 0, 20,
+                840);
+        check("effective top when IME open", imeOpen.top == 96);
+        check("effective navBottom with bottom cutout", imeOpen.navBottom == 48);
+        check("effective bottom uses IME when larger", imeOpen.bottom == 840);
+        check("effective imeBottom preserved", imeOpen.imeBottom == 840);
+    }
+
+    private static void testRequestCodeUniqueness() {
+        int[] codes = new int[]{
+                VoiceDictationController.REQUEST_RECORD_AUDIO_DICTATION,
+                VoiceDictationController.REQUEST_VOICE_DICTATION,
+                FileDownloader.REQUEST_STORAGE_DOWNLOAD,
+                MainActivity.REQUEST_DIR_CHOOSER,
+                MainActivity.REQUEST_POST_NOTIFICATIONS
+        };
+        Set<Integer> unique = new HashSet<>();
+        for (int code : codes) {
+            unique.add(code);
+        }
+        check("all activity/permission request codes are distinct", unique.size() == codes.length);
+    }
+
+    private static void testThemeColors() {
+        Integer dark = ThemeColors.parseHexColor("#101010");
+        check("parse #101010", dark != null && dark.intValue() == 0xFF101010);
+        Integer whiteShort = ThemeColors.parseHexColor("#fff");
+        check("parse #fff", whiteShort != null && whiteShort.intValue() == 0xFFFFFFFF);
+        Integer slate = ThemeColors.parseHexColor(" #0b0e17 ");
+        check("parse trimmed #0b0e17", slate != null && slate.intValue() == 0xFF0B0E17);
+        check("reject invalid hex", ThemeColors.parseHexColor("invalid") == null);
+        check("reject 5-digit hex", ThemeColors.parseHexColor("#12345") == null);
+        check("reject null hex", ThemeColors.parseHexColor(null) == null);
+
+        check("#101010 is dark", ThemeColors.isDarkColor(0xFF101010));
+        check("#0b0e17 is dark", ThemeColors.isDarkColor(0xFF0B0E17));
+        check("#ffffff is light", !ThemeColors.isDarkColor(0xFFFFFFFF));
+        check("#f3f4f6 is light", !ThemeColors.isDarkColor(0xFFF3F4F6));
+    }
+
     public static void main(String[] args) {
         testGatewayAuth();
         testOAuthTokenStore();
         testAppFileProviderDenyList();
         testDocumentsContractHelper();
         testOnboardingSeederUuid();
+        testEdgeToEdge();
+        testRequestCodeUniqueness();
+        testThemeColors();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");
     }
 }

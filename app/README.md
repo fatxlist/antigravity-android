@@ -146,6 +146,16 @@ graph TD
   Это необходимо для того, чтобы системный Window Splash на Android 12+ (API 31) отображал правильный цвет фона и логотип в соответствии с выбранной темой приложения, а не системной темой дня/ночи.
 - **`LauncherIconSwitcher`**:
   Переключает включенное состояние (`setComponentEnabledSetting`) между активностями с флагом `DONT_KILL_APP` строго в момент ухода приложения в фон (`onStop`), предотвращая сброс сессии пользователя.
+- **`HostActivityResolver`**:
+  Определяет активный или включённый экземпляр хост-активности (`LauncherDarkActivity` / `LauncherLightActivity` / `MainActivity`) для уведомлений (`ForegroundNotification`, `VoiceForegroundService`, `NotificationHandler`) и Share Sheet (`ShareReceiverActivity`), предотвращая создание дублирующих экземпляров `MainActivity`.
+- **Полноэкранный режим Edge-to-Edge (`EdgeToEdge`, `ActivityPainter`, `ImeInsetsAnimator`, `WindowInsets`)**:
+  - Прозрачные status bar и navigation bar (на API 24–25 для светлой темы используется полупрозрачный защитный скрим `LEGACY_LIGHT_SCRIM`), отключение системного принудительного контраста на API 29+ (`setStatusBarContrastEnforced(false)` / `setNavigationBarContrastEnforced(false)`), расширение в область выреза экрана (`shortEdges` на API 28–29, `always` на API 30+) через версионированные стили `values-v27`..`values-v30` и `values-v27`/`values-v31` темы сплэша.
+  - Переключение полярности иконок статус-бара и навигационной панели через `WindowInsetsController` (API 30+) и legacy-флаги `SYSTEM_UI_FLAG_LIGHT_*` (API 24–29).
+  - Диспетчеризация `WindowInsets` в `MainActivity` (включая `ExtraKeysBarView.setBottomInset` при закрытой клавиатуре, плавную покадровую анимацию клавиатуры на API 30+ через `ImeInsetsAnimator` и передачу CSS-переменных `--agy-inset-*` / `--agy-ime-bottom` в WebView), в `LocalPreviewDialog` и поддержка `viewport-fit=cover` / `env(safe-area-inset-*)` в `SplashOverlayHtml`.
+  - Динамическая синхронизация цвета поверхности: `AndroidBridge.setSurfaceColor` + `ActivityPainter.applySurfaceColor` обновляют фон окна и полярность системных баров под живой цвет фона Web UI (`theme_sync/notify.js`), а `SplashController` использует нативный `NativeSplashDotsView` и создаёт `WebView` лениво только при ошибках/перезапуске.
+- **Предиктивный жест «Назад» (`PredictiveBackHelper`)**:
+  - На Android 13+ (API 33+) активирован `android:enableOnBackInvokedCallback="true"` и регистрация `OnBackInvokedCallback` в изолированном классе `PredictiveBackHelper` с сохранением совместимости `onBackPressed()` для API 24–32.
+  - Сборка и юнит-тесты Java компилируются со строгими флагами `-Xlint:all,-deprecation,-options,-serial -Werror`.
 
 ---
 
@@ -154,10 +164,11 @@ graph TD
 ### 3.1. Утечки памяти (Memory Leaks)
 1. **Утечка `MainActivity` через `UiBridge` (ИСПРАВЛЕНО):** В `MainActivity.onDestroy()` добавлен вызов `androidBridge.setActivity(null)`. В `UiBridge` и `AndroidBridge` ссылки на `MainActivity` заменены на `WeakReference<MainActivity>`, что предотвращает утечку активити при смене ориентации и пересоздании.
 2. **Утечка WebView в `PopupWindowHandler` (ИСПРАВЛЕНО):** При срабатывании `window.open` после передачи URL во внешний браузер через `oauth.openInBrowser()` вызывается `popup.destroy()`, освобождая нативные ресурсы WebView всплывающего окна.
-3. **Статическая ссылка на Base64 в `FileDownloader`:** Поле `private static DownloadTask pendingTask` удерживает до 64 МБ Base64 данных при ожидании диалога разрешений. Если пользователь нажимает "Отмена", память не освобождается.
-   - *Рекомендация:* Сохранять временный файл на диск вместо удержания строки в памяти, либо сбрасывать задачу по таймауту.
+3. **Статическая ссылка на Base64 в `FileDownloader` и утечка `Activity` (ИСПРАВЛЕНО):** Base64-поток декодируется во временный кэш-файл (`pending_downloads/blob_*.tmp`) вместо удержания в статическом поле, `downloadDirect` использует `applicationContext`, очищает частичный файл при ошибке и гарантированно закрывает `HttpURLConnection` в `finally`.
 4. **Накопление объектов `WakeLock` в `PowerHandler` (ИСПРАВЛЕНО):** Реализована автоматическая очистка неактивных или отпущенных блокировок (`!lock.isHeld()`) через метод `cleanupUnheld()`, а также удаление блокировок из `ConcurrentHashMap` при проверке `status` и после `acquire`, что устраняет утечку памяти при истечении таймаута (`timeout_ms`).
 5. **Защита от OOM в `SystemGatewayServer` (ИСПРАВЛЕНО):** В методе `readHeaderLine` добавлен лимит максимальной длины строки заголовка (8192 байта), предотвращающий DoS/OOM при отправке бесконечных заголовков.
+6. **Жизненный цикл `SplashController` и `ThemeController` (ИСПРАВЛЕНО):** Добавлен идемпотентный `SplashController.destroy()` (с очисткой анимаций, `removeJavascriptInterface("SplashRetry")` и `WebView.destroy()`) и защита от гонки `dismiss()` / `setVisible()` и `splashWatchdog`; в `ThemeController.onVisualThemeChanged` устранена перезапись режима `MODE_SYSTEM`, добавлен `ThemeChangeListener` для мгновенного обновления `rootLayout` и `ExtraKeysBarView`.
+7. **Коллизия request code и dev-разрешения (ИСПРАВЛЕНО):** `MainActivity.REQUEST_POST_NOTIFICATIONS` перенесён с `1004` на `1005` (исключён конфликт с `VoiceDictationController.REQUEST_RECORD_AUDIO_DICTATION`); `VoiceForegroundService` использует динамическое разрешение `context.getPackageName() + ".permission.INTERNAL_BROADCAST"`.
 
 ### 3.2. Мертвый код (Dead Code)
 Следующие классы удалены из проекта (не использовались ни одним компонентом):
@@ -167,6 +178,7 @@ graph TD
 - `com.agy.install.ChmodRunner` (удален)
 - `com.agy.oauth.AuthReloader` (удален)
 - `com.agy.oauth.AuthTokenPoller` (удален)
+- `com.agy.oauth.DeepLinkHandler` (удален)
 - `com.agy.ui.lifecycle.DeepLinkForwarder` (удален)
 - `com.agy.ui.splash.SplashLoadingHtml` (удален)
 - `com.agy.util.LoopbackHost` (удален)

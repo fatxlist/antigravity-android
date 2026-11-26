@@ -8,14 +8,24 @@ import com.agy.util.MainThreadPost;
 /** Owns the persisted theme mode and resolved current context. */
 public final class ThemeController {
 
+    /** Notified on the main thread whenever the effective dark/light theme changes. */
+    public interface ThemeChangeListener {
+        void onThemeApplied(boolean dark);
+    }
+
     private final Context appContext;
     private Context currentContext;
     private int mode;
+    private ThemeChangeListener themeChangeListener;
 
     public ThemeController(Context context) {
         this.appContext = context.getApplicationContext();
         this.currentContext = context;
         this.mode = ThemePrefs.load(this.appContext);
+    }
+
+    public void setThemeChangeListener(ThemeChangeListener listener) {
+        this.themeChangeListener = listener;
     }
 
     public void updateContext(Context context) {
@@ -54,17 +64,7 @@ public final class ThemeController {
         // the main thread. Apply right away so status/nav bars and the window
         // background track the Web UI without waiting for a resume.
         LauncherIconSwitcher.scheduleSwitch(isDark());
-        final Activity activity = currentContext instanceof Activity
-                ? (Activity) currentContext : null;
-        if (activity != null) {
-            final boolean dark = isDark();
-            MainThreadPost.post(new Runnable() {
-                @Override
-                public void run() {
-                    ActivityPainter.apply(activity, dark);
-                }
-            });
-        }
+        applyThemeOnMainThread(isDark());
         return true;
     }
 
@@ -81,18 +81,28 @@ public final class ThemeController {
     /** Called when the Web UI paints a visual theme, without altering user mode preference. */
     public void onVisualThemeChanged(final String visual) {
         final boolean dark = "dark".equalsIgnoreCase(visual);
-        setMode(dark ? ThemeColors.MODE_DARK : ThemeColors.MODE_LIGHT);
         LauncherIconSwitcher.scheduleSwitch(dark);
+        applyThemeOnMainThread(dark);
+    }
+
+    private void applyThemeOnMainThread(final boolean dark) {
         final Activity activity = currentContext instanceof Activity
                 ? (Activity) currentContext : null;
-        if (activity != null) {
-            MainThreadPost.post(new Runnable() {
-                @Override
-                public void run() {
+        final ThemeChangeListener listener = themeChangeListener;
+        if (activity == null && listener == null) {
+            return;
+        }
+        MainThreadPost.post(new Runnable() {
+            @Override
+            public void run() {
+                if (activity != null) {
                     ActivityPainter.apply(activity, dark);
                 }
-            });
-        }
+                if (listener != null) {
+                    listener.onThemeApplied(dark);
+                }
+            }
+        });
     }
 
     /** Effective theme as a "light"/"dark" string (system mode is resolved). */

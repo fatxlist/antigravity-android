@@ -24,6 +24,7 @@ find "$SRC_DIR" "$GEN_DIR" -name '*.java' | sed 's/.*/"&"/' > "$ARG_FILE"
 
 javac -encoding UTF-8 -J-Dfile.encoding=UTF-8 \
     -source 1.8 -target 1.8 \
+    -Xlint:all,-deprecation,-options,-serial -Werror \
     -d "$OBJ_DIR" \
     -cp "$ANDROID_JAR" \
     "@$BUILD_DIR/java_sources.txt"

@@ -44,6 +44,7 @@ public final class ExtraKeysBarView extends LinearLayout {
     private Listener listener;
     private boolean darkTheme = true;
     private boolean ctrlActive = false;
+    private int bottomInsetPx = 0;
 
     public ExtraKeysBarView(Context context) {
         super(context);
@@ -141,6 +142,16 @@ public final class ExtraKeysBarView extends LinearLayout {
 
     public void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    /** Extends the bar background behind bottom navigation/gesture bars when IME is closed. */
+    public void setBottomInset(int bottomPx) {
+        int clamped = Math.max(0, bottomPx);
+        if (clamped == bottomInsetPx) {
+            return;
+        }
+        bottomInsetPx = clamped;
+        setPadding(0, 0, 0, clamped);
     }
 
     public void applyTheme(boolean dark) {

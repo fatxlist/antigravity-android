@@ -20,6 +20,10 @@ public final class ThemeManager {
         controller.updateContext(context);
     }
 
+    public void setThemeChangeListener(ThemeController.ThemeChangeListener listener) {
+        controller.setThemeChangeListener(listener);
+    }
+
     public int mode() {
         return controller.mode();
     }

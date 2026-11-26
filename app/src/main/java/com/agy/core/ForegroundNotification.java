@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 
+import com.agy.util.HostActivityResolver;
+
 /** Builds and updates the low-importance ongoing core notification. */
 public final class ForegroundNotification {
 
@@ -52,8 +54,7 @@ public final class ForegroundNotification {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(service, CHANNEL_ID)
                 : new Notification.Builder(service);
-        Intent openIntent = new Intent(service, com.agy.ui.MainActivity.class);
-        openIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent openIntent = HostActivityResolver.createOpenIntent(service);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             piFlags |= PendingIntent.FLAG_IMMUTABLE;

@@ -23,8 +23,10 @@
     -->
     <style name="SplashThemeDark" parent="@style/AppTheme">
         <item name="android:windowBackground">@color/splash_bg_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
     <style name="SplashThemeLight" parent="@style/AppTheme">
         <item name="android:windowBackground">@color/splash_bg_light</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

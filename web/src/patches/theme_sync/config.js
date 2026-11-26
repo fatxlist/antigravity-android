@@ -25,6 +25,8 @@ var state = {
   installed: false,
   last: null,
   lastFromBody: null,
+  lastSurfaceHex: null,
+  surfaceSyncTimer: 0,
   notifications: 0,
   observer: null,
   storageBound: false,

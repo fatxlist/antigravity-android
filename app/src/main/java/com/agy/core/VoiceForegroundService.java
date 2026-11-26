@@ -20,6 +20,8 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 
+import com.agy.util.HostActivityResolver;
+
 import org.json.JSONObject;
 
 import java.util.Locale;
@@ -48,7 +50,6 @@ public final class VoiceForegroundService extends Service {
     public static final String EXTRA_STATUS_TEXT = "status_text";
     public static final String EXTRA_SPEAKERPHONE = "speakerphone";
 
-    private static final String PERMISSION_INTERNAL_BROADCAST = "com.agy.permission.INTERNAL_BROADCAST";
     private static final String DEFAULT_STATUS_TEXT = "Voice session active";
     private static final long WAKE_LOCK_TIMEOUT_MS = 60L * 60L * 1000L;
 
@@ -419,9 +420,7 @@ public final class VoiceForegroundService extends Service {
             piFlags |= PendingIntent.FLAG_IMMUTABLE;
         }
 
-        Intent openApp = new Intent();
-        openApp.setClassName(getPackageName(), "com.agy.ui.MainActivity");
-        openApp.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent openApp = HostActivityResolver.createOpenIntent(this);
         PendingIntent contentPi = PendingIntent.getActivity(this, 10020, openApp, piFlags);
 
         Intent muteIntent = new Intent(this, VoiceForegroundService.class);
@@ -554,7 +553,7 @@ public final class VoiceForegroundService extends Service {
                 broadcast.setPackage(context.getPackageName());
                 broadcast.putExtra(EXTRA_ACTIVE, isActive);
                 broadcast.putExtra(EXTRA_MUTED, isMuted);
-                context.sendBroadcast(broadcast, PERMISSION_INTERNAL_BROADCAST);
+                context.sendBroadcast(broadcast, context.getPackageName() + ".permission.INTERNAL_BROADCAST");
             } catch (Throwable t) {
                 Log.d(TAG, "voice state broadcast failed: " + t.getMessage());
             }

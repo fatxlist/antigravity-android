@@ -1,8 +1,6 @@
 package com.agy.oauth;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.util.Log;
 
 import com.agy.util.SensitiveDataRedactor;
@@ -11,7 +9,7 @@ import java.io.File;
 
 /**
  * OAuth is delegated to an external browser (Google blocks WebView login).
- * This is the thin facade over the matcher, launcher, token store and deep link.
+ * This is the thin facade over the matcher, launcher, and token store.
  */
 public final class OAuthManager {
 
@@ -51,13 +49,5 @@ public final class OAuthManager {
     /** Opens the URL as a Chrome Custom Tab, falling back to any browser. */
     public boolean openInBrowser(Context context, String url) {
         return launcher.openInBrowser(context, url);
-    }
-
-    public static String getCallbackScheme(Context context) {
-        return DeepLinkHandler.getCallbackScheme(context);
-    }
-
-    public boolean handleDeepLink(Activity activity, Intent intent, Runnable onSuccess) {
-        return DeepLinkHandler.handleDeepLink(activity, intent, onSuccess);
     }
 }

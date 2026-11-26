@@ -210,8 +210,9 @@ class TestMcpAndroidServer(unittest.TestCase):
                 f.write("@echo off\r\necho MOCK_RISH_OK %*\r\n")
         else:
             self.mock_rish = os.path.join(self.prefix_dir, "bin", "mock_rish.sh")
+            sh_bin = shutil.which("sh") or ("/system/bin/sh" if os.path.exists("/system/bin/sh") else "/bin/sh")
             with open(self.mock_rish, "w", encoding="utf-8") as f:
-                f.write("#!/bin/sh\necho \"MOCK_RISH_OK $*\"\n")
+                f.write(f"#!{sh_bin}\necho \"MOCK_RISH_OK $*\"\n")
             os.chmod(self.mock_rish, 0o755)
 
         env = os.environ.copy()
@@ -220,6 +221,8 @@ class TestMcpAndroidServer(unittest.TestCase):
         env["AGY_RISH_BIN"] = self.mock_rish
         env["AGY_DAEMON_BIN"] = DAEMON_SCRIPT
         env.pop("AGY_GATEWAY_PORT", None)
+        env.pop("AGY_GATEWAY_TOKEN", None)
+        env.pop("AGY_GATEWAY_TOKEN_FILE", None)
 
         self.proc = subprocess.Popen(
             [sys.executable, MCP_SCRIPT],

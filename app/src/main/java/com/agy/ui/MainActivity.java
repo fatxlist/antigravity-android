@@ -13,6 +13,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -35,12 +36,16 @@ import com.agy.oauth.OAuthManager;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.RuntimeManager;
 import com.agy.shell.ShizukuBridge;
+import com.agy.theme.EdgeToEdge;
+import com.agy.theme.ImeInsetsAnimator;
+import com.agy.theme.ThemeColors;
 import com.agy.theme.ThemeManager;
 import com.agy.ui.extra.ExtraKeysBarView;
 import com.agy.ui.extra.LocalPreviewDialog;
 import com.agy.ui.extra.VoiceDictationController;
 import com.agy.ui.lifecycle.AppLifecycle;
 import com.agy.ui.lifecycle.BackNavigator;
+import com.agy.ui.lifecycle.PredictiveBackHelper;
 import com.agy.ui.lifecycle.ThemeRefresher;
 import com.agy.ui.splash.SplashController;
 import com.agy.ui.webview.AgyWebChromeClient;
@@ -64,7 +69,7 @@ public class MainActivity extends Activity
     private static final int REQUEST_STORAGE = 100;
     private static final int REQUEST_FILE_CHOOSER = 1002;
     private static final int REQUEST_RECORD_AUDIO = 1003;
-    private static final int REQUEST_POST_NOTIFICATIONS = 1004;
+    public static final int REQUEST_POST_NOTIFICATIONS = 1005;
     private static final String PREF_ASKED_NOTIFICATIONS = "asked_post_notifications";
     private static final long SPLASH_TIMEOUT_MS = 60000;
     private static final long POLL_STARTUP_INTERVAL_MS = 50;
@@ -82,7 +87,10 @@ public class MainActivity extends Activity
     private WebViewHost webViewHost;
     private SplashController splash;
     private FrameLayout rootLayout;
+    private LinearLayout contentColumn;
     private ExtraKeysBarView extraKeysBar;
+    private EdgeToEdge.InsetsRect lastInsets;
+    private Object backInvokedHandle;
     private LocalPreviewDialog localPreviewDialog;
     private VoiceDictationController voiceDictation;
     private VoiceForegroundService.StateListener voiceServiceStateListener;
@@ -95,6 +103,16 @@ public class MainActivity extends Activity
     private final List<String> pendingSharedPayloads = new ArrayList<>();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private final Runnable splashWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (appLoaded && splash != null && !splash.isFatalShown()) {
+                Log.w(TAG, "watchdog: auto-dismissing splash after timeout");
+                dismissSplash();
+            }
+        }
+    };
 
     /**
      * Runs for the whole activity life: it drives the splash, loads the app on
@@ -132,15 +150,8 @@ public class MainActivity extends Activity
                     splash.showLoading();
                 }
                 webViewHost.loadApp();
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (appLoaded && !splash.isFatalShown()) {
-                            Log.w(TAG, "watchdog: auto-dismissing splash after timeout");
-                            dismissSplash();
-                        }
-                    }
-                }, 10000);
+                handler.removeCallbacks(splashWatchdog);
+                handler.postDelayed(splashWatchdog, 10000);
             }
             return;
         }
@@ -159,6 +170,19 @@ public class MainActivity extends Activity
 
         themeManager = new ThemeManager(this);
         themeManager.applyToActivity(this);
+        themeManager.setThemeChangeListener(new com.agy.theme.ThemeController.ThemeChangeListener() {
+            @Override
+            public void onThemeApplied(boolean dark) {
+                if (rootLayout != null) {
+                    rootLayout.setBackgroundColor(dark
+                            ? com.agy.theme.ThemeColors.COLOR_DARK
+                            : com.agy.theme.ThemeColors.COLOR_LIGHT);
+                }
+                if (extraKeysBar != null) {
+                    extraKeysBar.applyTheme(dark);
+                }
+            }
+        });
 
 
         oauthManager = new OAuthManager();
@@ -173,7 +197,7 @@ public class MainActivity extends Activity
         rootLayout.setBackgroundColor(themeManager.getBackgroundColor());
         setContentView(rootLayout);
 
-        LinearLayout contentColumn = new LinearLayout(this);
+        contentColumn = new LinearLayout(this);
         contentColumn.setOrientation(LinearLayout.VERTICAL);
         contentColumn.addView(webViewHost.getWebView(),
                 new LinearLayout.LayoutParams(
@@ -198,6 +222,35 @@ public class MainActivity extends Activity
         contentColumn.addView(extraKeysBar,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        contentColumn.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                EdgeToEdge.InsetsRect r = EdgeToEdge.resolveInsets(insets);
+                lastInsets = r;
+                applyContentInsets(r);
+                pushSafeAreaInsetsToJs(r);
+                return EdgeToEdge.consumeSystemInsets(insets);
+            }
+        });
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            ImeInsetsAnimator.install(contentColumn, new ImeInsetsAnimator.Listener() {
+                @Override
+                public void onImeProgress(EdgeToEdge.InsetsRect r) {
+                    lastInsets = r;
+                    applyContentInsets(r);
+                }
+
+                @Override
+                public void onImeEnd() {
+                    if (lastInsets != null) {
+                        pushSafeAreaInsetsToJs(lastInsets);
+                    }
+                    if (contentColumn != null) {
+                        contentColumn.requestApplyInsets();
+                    }
+                }
+            });
+        }
         rootLayout.addView(contentColumn, ViewParams.full());
 
         splash = new SplashController(this, themeManager, rootLayout);
@@ -230,6 +283,13 @@ public class MainActivity extends Activity
         handleSharedIntent(getIntent());
 
         splashDeadline = System.currentTimeMillis() + SPLASH_TIMEOUT_MS;
+        backInvokedHandle = PredictiveBackHelper.register(this, new Runnable() {
+            @Override
+            public void run() {
+                handleBackNavigation();
+            }
+        });
+        contentColumn.requestApplyInsets();
         requestStoragePermissions();
 
         startCoreService();
@@ -251,6 +311,7 @@ public class MainActivity extends Activity
 
     /** Retry re-runs install + start: stop the service, then start it again. */
     private void retryCore() {
+        handler.removeCallbacks(splashWatchdog);
         splash.clearFatal();
         appLoaded = false;
         uiReady = false;
@@ -280,6 +341,7 @@ public class MainActivity extends Activity
 
     /** Idempotent; called by AndroidBridge.onUiReady() on the main thread. */
     public void dismissSplash() {
+        handler.removeCallbacks(splashWatchdog);
         Log.i(TAG, "dismissSplash: fading out splashView (280ms)");
         splash.dismiss();
         if (!pendingSharedPayloads.isEmpty()) {
@@ -291,6 +353,9 @@ public class MainActivity extends Activity
     public void onWebUiReady() {
         uiReady = true;
         flushPendingSharedPayloads();
+        if (lastInsets != null) {
+            pushSafeAreaInsetsToJs(lastInsets);
+        }
         if (VoiceForegroundService.isActive()) {
             notifyVoiceServiceStateChanged(true, VoiceForegroundService.isMuted());
         }
@@ -301,8 +366,59 @@ public class MainActivity extends Activity
             extraKeysBar.setVisibility(visible ? View.VISIBLE : View.GONE);
             if (!visible) {
                 extraKeysBar.resetStickyModifiers();
+                extraKeysBar.setBottomInset(0);
             }
         }
+        if (lastInsets != null) {
+            applyContentInsets(lastInsets);
+        }
+        if (contentColumn != null) {
+            contentColumn.requestApplyInsets();
+        }
+    }
+
+    private void applyContentInsets(EdgeToEdge.InsetsRect r) {
+        if (r == null || contentColumn == null) {
+            return;
+        }
+        boolean extraVisible = extraKeysBar != null && extraKeysBar.getVisibility() == View.VISIBLE;
+        boolean imeOpen = r.imeBottom > r.navBottom;
+        if (extraVisible && !imeOpen) {
+            contentColumn.setPadding(r.left, r.top, r.right, 0);
+            extraKeysBar.setBottomInset(r.navBottom);
+        } else {
+            contentColumn.setPadding(r.left, r.top, r.right, r.bottom);
+            if (extraKeysBar != null) {
+                extraKeysBar.setBottomInset(0);
+            }
+        }
+    }
+
+    private void pushSafeAreaInsetsToJs(EdgeToEdge.InsetsRect r) {
+        if (!uiReady || r == null || webViewHost == null) {
+            return;
+        }
+        WebView wv = webViewHost.getWebView();
+        if (wv == null) {
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        if (density <= 0f) {
+            density = 1f;
+        }
+        int topDp = Math.round(r.top / density);
+        int bottomDp = Math.round(r.bottom / density);
+        int leftDp = Math.round(r.left / density);
+        int rightDp = Math.round(r.right / density);
+        int imeDp = Math.round(r.imeBottom / density);
+        String js = "(function(d){if(!d)return;var s=d.style;"
+                + "s.setProperty('--agy-inset-top','" + topDp + "px');"
+                + "s.setProperty('--agy-inset-bottom','" + bottomDp + "px');"
+                + "s.setProperty('--agy-inset-left','" + leftDp + "px');"
+                + "s.setProperty('--agy-inset-right','" + rightDp + "px');"
+                + "s.setProperty('--agy-ime-bottom','" + imeDp + "px');"
+                + "})(document.documentElement);";
+        wv.evaluateJavascript(js, null);
     }
 
     public void openLocalPreview(String url) {
@@ -521,9 +637,24 @@ public class MainActivity extends Activity
             com.agy.ui.download.FileDownloader.clearPendingTask();
         }
         voiceServiceStateListener = null;
+        PredictiveBackHelper.unregister(this, backInvokedHandle);
+        backInvokedHandle = null;
         AppLifecycle.destroy(handler);
+        if (themeManager != null) {
+            themeManager.setThemeChangeListener(null);
+        }
+        if (filePathCallback != null) {
+            try {
+                filePathCallback.onReceiveValue(null);
+            } catch (Throwable ignored) {
+            }
+            filePathCallback = null;
+        }
         if (androidBridge != null) {
             androidBridge.setActivity(null);
+        }
+        if (splash != null) {
+            splash.destroy();
         }
         if (rootLayout != null) {
             rootLayout.removeAllViews();
@@ -563,6 +694,9 @@ public class MainActivity extends Activity
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         refreshTheme();
+        if (contentColumn != null) {
+            contentColumn.requestApplyInsets();
+        }
     }
 
     @Override
@@ -631,7 +765,25 @@ public class MainActivity extends Activity
         }
     }
 
+    /** Applies a live surface color reported by the web UI across root view, bars, and extra keys. */
+    public void applySurfaceColor(int color) {
+        com.agy.theme.ActivityPainter.applySurfaceColor(this, color);
+        if (rootLayout != null) {
+            rootLayout.setBackgroundColor(color);
+        }
+        if (extraKeysBar != null) {
+            extraKeysBar.applyTheme(ThemeColors.isDarkColor(color));
+        }
+    }
+
+    private void handleBackNavigation() {
+        if (!BackNavigator.handle(this, webViewHost != null ? webViewHost.getWebView() : null)) {
+            finish();
+        }
+    }
+
     @Override
+    @SuppressWarnings("deprecation")
     public void onBackPressed() {
         if (!BackNavigator.handle(this, webViewHost != null ? webViewHost.getWebView() : null)) {
             super.onBackPressed();

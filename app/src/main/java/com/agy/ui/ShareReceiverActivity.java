@@ -1,15 +1,12 @@
 package com.agy.ui;
 
 import android.app.Activity;
-import android.content.ComponentName;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
 
 import com.agy.ui.extra.SharePayloadExtractor;
-import com.agy.ui.launcher.LauncherDarkActivity;
-import com.agy.ui.launcher.LauncherLightActivity;
+import com.agy.util.HostActivityResolver;
 
 /**
  * Dedicated exported Share Sheet target (ACTION_SEND / ACTION_SEND_MULTIPLE).
@@ -83,25 +80,6 @@ public final class ShareReceiverActivity extends Activity {
     }
 
     private Class<?> resolveHostActivityClass() {
-        MainActivity active = MainActivity.activeActivity;
-        if (active != null && !active.isFinishing() && !active.isDestroyed()) {
-            return active.getClass();
-        }
-        try {
-            PackageManager pm = getPackageManager();
-            int lightState = pm.getComponentEnabledSetting(
-                    new ComponentName(this, LauncherLightActivity.class));
-            if (lightState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
-                return LauncherLightActivity.class;
-            }
-            int darkState = pm.getComponentEnabledSetting(
-                    new ComponentName(this, LauncherDarkActivity.class));
-            if (darkState != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-                    && darkState != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER) {
-                return LauncherDarkActivity.class;
-            }
-        } catch (Exception ignored) {
-        }
-        return MainActivity.class;
+        return HostActivityResolver.resolve(this);
     }
 }
