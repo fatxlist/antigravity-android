@@ -17,6 +17,7 @@ from .executor import (
     log,
     load_tasks,
     execute_action_async,
+    redact_secrets,
     RISH_BIN,
 )
 
@@ -47,7 +48,7 @@ def check_github_repo(trigger_info, endpoint_type="pulls"):
             log(f"GitHub trigger fired for {repo} ({endpoint_type}): '{title}'")
             return True
     except Exception as e:
-        log(f"GitHub check error for {repo}: {e}")
+        log(f"GitHub check error for {repo}: {redact_secrets(e, (token,))}")
     return False
 
 
@@ -132,7 +133,10 @@ def start_webhook_listener(port):
             except Exception:
                 self._reply(400, {"status": "invalid_body"})
                 return
-            log(f"Authenticated webhook on port {port}: {body[:200]}")
+            secrets_to_mask = [provided] + [
+                t.get("trigger", {}).get("token", "") for t in authorized
+            ]
+            log(f"Authenticated webhook on port {port}: {redact_secrets(body[:200], secrets_to_mask)}")
             for task in authorized:
                 execute_action_async(task)
             self._reply(200, {"status": "ok", "fired": len(authorized)})

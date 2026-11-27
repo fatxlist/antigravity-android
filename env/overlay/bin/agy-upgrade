@@ -2,9 +2,10 @@
 # agy-upgrade - Safe Antigravity update, backup, and state preservation manager.
 #
 # Preserves:
-#   1. Agent State: Brain, conversation history, skills, rules, config, projects (~/.gemini/)
+#   1. Agent State: Brain, conversation history, skills, rules, config (~/.gemini/)
+#      excluding OAuth tokens, account vaults, daemon runtime/token files, and .bash_history
 #   2. User Packages & Libs: Packages installed via pkg, pip, npm, and user shell configs
-#   3. External Storage Safeguard: Keeps backups in /storage/emulated/0/Documents/antigravity-backup/
+#   3. Private Storage Safeguard: Keeps 0600 backups in $HOME/backups/ (or AGY_BACKUP_DIR)
 #
 set -euo pipefail
 
@@ -13,25 +14,24 @@ export PREFIX="${PREFIX:-$(cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
 export HOME="${HOME:-$(dirname "$PREFIX")}"
 export PATH="$PREFIX/bin:$PATH"
 
-BACKUP_ROOT="/storage/emulated/0/Documents/antigravity-backup"
+BACKUP_ROOT="${AGY_BACKUP_DIR:-$HOME/backups}"
 PYTHON_BIN="$PREFIX/bin/python3"
 if [ ! -x "$PYTHON_BIN" ]; then
     PYTHON_BIN="python3"
 fi
-
-mkdir -p "$BACKUP_ROOT"
 
 usage() {
     cat << 'EOF'
 Antigravity Safe Upgrade & State Preservation Manager (agy-upgrade)
 
 Usage:
-  agy-upgrade backup [destination.tar.gz]   Create a complete backup of agent brain, skills,
-                                            rules, and user package manifests.
+  agy-upgrade backup [destination.tar.gz]   Create a 0600 backup of agent brain, skills,
+                                            rules, and user package manifests (excludes
+                                            OAuth tokens, credentials, and .bash_history).
   agy-upgrade restore [backup.tar.gz]       Restore agent brain, skills, and reinstall user packages.
   agy-upgrade apply <path_to_apk>           Safe 1-step upgrade: backs up current state, then
                                             installs new APK via pm install -r.
-  agy-upgrade list                          List all available backups in external storage.
+  agy-upgrade list                          List all available backups in private backup dir.
   agy-upgrade status                        Display current agent memory, skills, and package stats.
 
 Aliases:
@@ -47,14 +47,18 @@ cmd_backup() {
     echo "============================================================"
     echo "[*] Destination: $dest"
     
-    AGY_BACKUP_PATH="$dest" AGY_BACKUP_ROOT="$BACKUP_ROOT" "$PYTHON_BIN" - << 'PYEOF'
-import os, sys, json, tarfile, time, subprocess, shutil
+    AGY_BACKUP_PATH="$dest" AGY_BACKUP_ROOT="$BACKUP_ROOT" "$PYTHON_BIN" -B - << 'PYEOF'
+import os, sys, json, tarfile, time, subprocess, shutil, tempfile
 
 home = os.environ.get("HOME", "")
 prefix = os.environ.get("PREFIX", "")
 backup_path = os.environ["AGY_BACKUP_PATH"]
 backup_root = os.environ["AGY_BACKUP_ROOT"]
-os.makedirs(backup_root, exist_ok=True)
+os.makedirs(backup_root, mode=0o700, exist_ok=True)
+os.chmod(backup_root, 0o700)
+backup_parent = os.path.dirname(os.path.abspath(backup_path))
+if backup_parent:
+    os.makedirs(backup_parent, mode=0o700, exist_ok=True)
 
 print(f"[*] Scanning Home: {home}")
 print(f"[*] Scanning Prefix: {prefix}")
@@ -85,55 +89,140 @@ try:
 except Exception:
     pass
 
-tmp_meta_dir = os.path.join(backup_root, ".tmp_manifest")
-os.makedirs(tmp_meta_dir, exist_ok=True)
-with open(os.path.join(tmp_meta_dir, "manifests.json"), "w") as f:
-    json.dump(manifests, f, indent=2)
-
-meta = {
-    "timestamp": time.time(),
-    "date": time.strftime("%Y-%m-%d %H:%M:%S"),
-    "home": home,
-    "prefix": prefix,
-    "packages_count": len(manifests.get("pkg", [])),
-    "pip_count": len(manifests.get("pip", []))
+SENSITIVE_EXACT = {
+    ".gemini/jetski-standalone-oauth-token",
+    ".gemini/agy-account-vault.json",
 }
-with open(os.path.join(tmp_meta_dir, "metadata.json"), "w") as f:
-    json.dump(meta, f, indent=2)
+SENSITIVE_DAEMON_FILES = {"tasks.json", "daemon.pid", "daemon.lock", "daemon.log"}
+SKIP_SENSITIVE_SUBTREES = {"brain", "builtin", "plugins", "skills", "mcp"}
+SENSITIVE_MARKERS = ("oauth", "token", "vault", "cookie", "credential", "secret")
+SENSITIVE_EXTS = (".key", ".pem", ".p12", ".jks")
+excluded_count = 0
 
-print("[*] Packaging Agent State (.gemini, brain, skills, configs)...")
+def _gemini_filter(tarinfo):
+    global excluded_count
+    rel = tarinfo.name.replace("\\", "/").lstrip("/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    parts = [p for p in rel.split("/") if p]
+    base = parts[-1] if parts else ""
+    base_low = base.lower()
 
-with tarfile.open(backup_path, "w:gz") as tar:
-    # 1. State: .gemini
-    gemini_dir = os.path.join(home, ".gemini")
-    if os.path.isdir(gemini_dir):
-        print("  + Adding ~/.gemini (conversations, brain, skills, rules, config)")
-        tar.add(gemini_dir, arcname=".gemini")
-    
-    # 2. User shell configs
-    for conf in [".bashrc", ".profile", ".gitconfig", ".bash_history"]:
-        conf_path = os.path.join(home, conf)
-        if os.path.isfile(conf_path):
-            print(f"  + Adding {conf}")
-            tar.add(conf_path, arcname=conf)
+    if rel in SENSITIVE_EXACT:
+        excluded_count += 1
+        return None
+    if "-oauth-token" in base_low or "-account-vault" in base_low:
+        excluded_count += 1
+        return None
+    if len(parts) >= 3 and parts[0] == ".gemini" and ("daemon" in parts[1:-1]):
+        if base in SENSITIVE_DAEMON_FILES or (base.startswith("hub_") and base.endswith(".json")):
+            excluded_count += 1
+            return None
+    if not tarinfo.isdir():
+        subtree = parts[2] if len(parts) >= 3 and parts[0] == ".gemini" else (parts[1] if len(parts) >= 2 else "")
+        if subtree not in SKIP_SENSITIVE_SUBTREES:
+            if (
+                base_low == ".netrc"
+                or any(m in base_low for m in SENSITIVE_MARKERS)
+                or base_low.endswith(SENSITIVE_EXTS)
+            ):
+                excluded_count += 1
+                return None
+    return tarinfo
 
-    # 3. Package and dependency manifests
-    tar.add(tmp_meta_dir, arcname="backup_meta")
-
-shutil.rmtree(tmp_meta_dir, ignore_errors=True)
-
-# Update latest symlink
-latest = os.path.join(backup_root, "latest.tar.gz")
+tmp_meta_dir = tempfile.mkdtemp(prefix=".tmp_manifest_", dir=backup_root)
+os.chmod(tmp_meta_dir, 0o700)
+tmp_backup = f"{backup_path}.tmp.{os.getpid()}"
 try:
-    if os.path.islink(latest) or os.path.isfile(latest):
-        os.remove(latest)
-    shutil.copyfile(backup_path, latest)
+    with open(os.path.join(tmp_meta_dir, "manifests.json"), "w") as f:
+        json.dump(manifests, f, indent=2)
+
+    meta = {
+        "timestamp": time.time(),
+        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "home": home,
+        "prefix": prefix,
+        "packages_count": len(manifests.get("pkg", [])),
+        "pip_count": len(manifests.get("pip", []))
+    }
+    with open(os.path.join(tmp_meta_dir, "metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print("[*] Packaging Agent State (.gemini, brain, skills, configs)...")
+
+    fd = os.open(tmp_backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as bf:
+        with tarfile.open(fileobj=bf, mode="w:gz") as tar:
+            # 1. State: .gemini (excluding credentials/tokens)
+            gemini_dir = os.path.join(home, ".gemini")
+            if os.path.isdir(gemini_dir):
+                print("  + Adding ~/.gemini (conversations, brain, skills, rules, config; excluding credentials)")
+                tar.add(gemini_dir, arcname=".gemini", filter=_gemini_filter)
+
+            # 2. User shell configs (never archive .bash_history)
+            for conf in [".bashrc", ".profile", ".gitconfig"]:
+                conf_path = os.path.join(home, conf)
+                if os.path.isfile(conf_path):
+                    print(f"  + Adding {conf}")
+                    tar.add(conf_path, arcname=conf)
+
+            # 3. Package and dependency manifests
+            tar.add(tmp_meta_dir, arcname="backup_meta")
+
+    os.replace(tmp_backup, backup_path)
+    os.chmod(backup_path, 0o600)
+    if excluded_count:
+        print(f"  - Excluded {excluded_count} sensitive credential/runtime file(s)")
 except Exception:
-    pass
+    try:
+        if os.path.exists(tmp_backup):
+            os.remove(tmp_backup)
+    except OSError:
+        pass
+    raise
+finally:
+    shutil.rmtree(tmp_meta_dir, ignore_errors=True)
+
+# Update latest symlink atomically
+latest = os.path.join(backup_root, "latest.tar.gz")
+if os.path.abspath(backup_path) != os.path.abspath(latest):
+    target = (
+        os.path.basename(backup_path)
+        if os.path.realpath(os.path.dirname(os.path.abspath(backup_path))) == os.path.realpath(backup_root)
+        else os.path.abspath(backup_path)
+    )
+    tmp_link = os.path.join(backup_root, f".latest.{os.getpid()}.tmp")
+    try:
+        if os.path.lexists(tmp_link):
+            os.unlink(tmp_link)
+        os.symlink(target, tmp_link)
+        os.replace(tmp_link, latest)
+        print(f"[SUCCESS] Updated latest symlink: {latest} -> {target}")
+    except OSError as e:
+        try:
+            if os.path.lexists(tmp_link):
+                os.unlink(tmp_link)
+        except OSError:
+            pass
+        tmp_latest = os.path.join(backup_root, f".latest.{os.getpid()}.copy.tmp")
+        try:
+            lfd = os.open(tmp_latest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(lfd, 0o600)
+            with os.fdopen(lfd, "wb") as dst_f, open(backup_path, "rb") as src_f:
+                shutil.copyfileobj(src_f, dst_f)
+            os.replace(tmp_latest, latest)
+            os.chmod(latest, 0o600)
+            print(f"[NOTE] Symlink unsupported ({e}); copied latest backup with 0600: {latest}")
+        except Exception:
+            try:
+                if os.path.exists(tmp_latest):
+                    os.remove(tmp_latest)
+            except OSError:
+                pass
 
 size_mb = os.path.getsize(backup_path) / (1024 * 1024)
 print(f"[SUCCESS] Backup created successfully: {backup_path} ({size_mb:.2f} MB)")
-print(f"[SUCCESS] Updated latest pointer: {latest}")
 PYEOF
 }
 
@@ -148,7 +237,7 @@ cmd_restore() {
     echo "============================================================"
     echo "[*] Source: $src"
 
-    AGY_BACKUP_PATH="$src" "$PYTHON_BIN" - << 'PYEOF'
+    AGY_BACKUP_PATH="$src" "$PYTHON_BIN" -B - << 'PYEOF'
 import os, sys, json, tarfile, subprocess
 
 home = os.environ.get("HOME", "")
@@ -291,7 +380,11 @@ cmd_apply() {
 cmd_list() {
     echo "Available Backups in $BACKUP_ROOT:"
     echo "------------------------------------------------------------"
-    ls -lh "$BACKUP_ROOT"/*.tar.gz 2>/dev/null || echo "No backups found yet."
+    if [ ! -d "$BACKUP_ROOT" ]; then
+        echo "No backups found yet."
+    else
+        ls -lh "$BACKUP_ROOT"/*.tar.gz 2>/dev/null || echo "No backups found yet."
+    fi
     echo "------------------------------------------------------------"
 }
 

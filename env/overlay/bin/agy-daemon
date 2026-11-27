@@ -69,8 +69,10 @@ _LOCK_FD = None
 def acquire_daemon_lock():
     """Acquire non-blocking exclusive flock on persistent daemon.lock (never unlinked)."""
     global _LOCK_FD
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    os.fchmod(fd, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as e:
@@ -83,8 +85,10 @@ def acquire_daemon_lock():
 
 
 def is_lock_held():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    os.fchmod(fd, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -97,11 +101,15 @@ def is_lock_held():
 
 
 def write_pid_file():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
     tmp_pid = PID_FILE + ".tmp"
-    with open(tmp_pid, "w", encoding="utf-8") as f:
+    fd = os.open(tmp_pid, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
     os.replace(tmp_pid, PID_FILE)
+    os.chmod(PID_FILE, 0o600)
 
 
 def is_our_daemon(pid):
@@ -147,7 +155,7 @@ def daemonize():
         sys.exit(1)
 
     os.setsid()
-    os.umask(0)
+    os.umask(0o077)
 
     try:
         pid = os.fork()
@@ -165,9 +173,15 @@ def daemonize():
     # Redirect stdin/stdout/stderr
     with open("/dev/null", "r") as dev_null:
         os.dup2(dev_null.fileno(), sys.stdin.fileno())
-    log_fd = open(LOG_FILE, "a", encoding="utf-8")
-    os.dup2(log_fd.fileno(), sys.stdout.fileno())
-    os.dup2(log_fd.fileno(), sys.stderr.fileno())
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
+    log_fd = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.fchmod(log_fd, 0o600)
+    os.chmod(LOG_FILE, 0o600)
+    os.dup2(log_fd, sys.stdout.fileno())
+    os.dup2(log_fd, sys.stderr.fileno())
+    if log_fd > 2:
+        os.close(log_fd)
 
     def sig_handler(signum, frame):
         log(f"Daemon received signal {signum}. Shutting down...")
@@ -371,7 +385,10 @@ def cmd_task_list(args):
         status = "Active" if t.get("enabled") else "Disabled"
         last_st = t.get("last_run_status", "never")
         print(f"- [{t['id']}] {t.get('name')} | Status: {status} | Last: {last_st}")
-        print(f"  Trigger: {t.get('trigger', {}).get('type')} ({t.get('trigger', {})})")
+        trig_display = dict(t.get("trigger", {}) or {})
+        if "token" in trig_display and trig_display["token"]:
+            trig_display["token"] = "***"
+        print(f"  Trigger: {trig_display.get('type')} ({trig_display})")
         if t.get("command"):
             print(f"  Command: {t.get('command')}")
         if t.get("prompt"):

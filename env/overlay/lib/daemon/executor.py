@@ -5,6 +5,7 @@ notification dispatch, logging, and workspace UI waking.
 """
 
 import os
+import re
 import sys
 import ssl
 import copy
@@ -66,14 +67,44 @@ def _notify_bin():
     return "agy-notify"
 
 
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)(Authorization\s*:\s*(?:token|bearer)\s+)([^\s,;\"']+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(X-AGY-Token\s*:\s*)([^\s,;\"']+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(X-Agy-Gateway-Token\s*:\s*)([^\s,;\"']+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(x-codeium-csrf-token\s*:\s*)([^\s,;\"']+)"), r"\1[REDACTED]"),
+    (re.compile(r"\b(?:ghp|github_pat)_[A-Za-z0-9_]+\b"), "[REDACTED]"),
+)
+
+
+def _ensure_private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def redact_secrets(text, extra_secrets=()):
+    s = str(text)
+    for secret in extra_secrets:
+        if secret:
+            sec = str(secret)
+            if sec:
+                s = s.replace(sec, "[REDACTED]")
+    for pattern, repl in _SECRET_PATTERNS:
+        s = pattern.sub(repl, s)
+    return s
+
+
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    formatted = f"[{ts}] {msg}"
+    safe_msg = redact_secrets(msg)
+    formatted = f"[{ts}] {safe_msg}"
     print(formatted, flush=True)
     try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
+        _ensure_private_dir(CONFIG_DIR)
+        fd = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(formatted + "\n")
+        os.chmod(LOG_FILE, 0o600)
     except Exception:
         pass
 
@@ -206,11 +237,14 @@ def load_tasks():
 
 
 def save_tasks(tasks):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    _ensure_private_dir(CONFIG_DIR)
     tmp_path = TASKS_FILE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(tasks, f, indent=2, ensure_ascii=False)
     os.replace(tmp_path, TASKS_FILE)
+    os.chmod(TASKS_FILE, 0o600)
     with _TASKS_CACHE_LOCK:
         _TASKS_CACHE["key"] = None
         _TASKS_CACHE["tasks"] = []
