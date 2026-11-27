@@ -123,18 +123,34 @@ function installEventOptimizations(win, documentRef) {
     var origRemove = proto.removeEventListener;
     if (typeof origAdd !== 'function') return;
 
+    var scrollbarListenerCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+    function isBlockedScrollbarDocListener(type, listener) {
+      var cacheKey = scrollbarListenerCache ? scrollbarListenerCache.get(listener) : undefined;
+      if (cacheKey !== undefined) {
+        return cacheKey === 'all' || cacheKey === type;
+      }
+      var classification = 'keep';
+      try {
+        var fnStr = Function.prototype.toString.call(listener);
+        if (fnStr.indexOf('case "dragstart":') !== -1 && fnStr.indexOf('deltaX') !== -1) {
+          classification = 'all';
+        } else if (fnStr.indexOf('.md-table-scroll') !== -1) {
+          classification = 'scroll';
+        }
+      } catch (_) {}
+      if (scrollbarListenerCache) {
+        scrollbarListenerCache.set(listener, classification);
+      }
+      return classification === 'all' || classification === type;
+    }
+
     proto.addEventListener = function (type, listener, options) {
       if (listener && typeof listener === 'function') {
         if (this === documentRef && SCROLLBAR_DOC_EVENTS[type]) {
-          try {
-            var fnStr = Function.prototype.toString.call(listener);
-            if (type === 'scroll' && fnStr.indexOf('.md-table-scroll') !== -1) {
-              return;
-            }
-            if (fnStr.indexOf('case "dragstart":') !== -1 && fnStr.indexOf('deltaX') !== -1) {
-              return;
-            }
-          } catch (_) {}
+          if (isBlockedScrollbarDocListener(type, listener)) {
+            return;
+          }
         }
         if (type === 'wheel' && this && this.getAttribute &&
             this.getAttribute('data-testid') === 'overlay-scrollbar') {
@@ -370,6 +386,10 @@ function installStyles(documentRef) {
       '  display: none !important;',
       '  content: none !important;',
       '  background: none !important;',
+      '}',
+      '[data-testid="autoscroll-viewport"] [role="article"] {',
+      '  content-visibility: auto;',
+      '  contain-intrinsic-block-size: auto 180px;',
       '}',
       '[data-testid="autoscroll-viewport"] > div > .scroll-mt-4,',
       '[data-testid="autoscroll-viewport"] [role="article"][aria-label="Agent response"],',

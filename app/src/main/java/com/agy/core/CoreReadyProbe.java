@@ -8,6 +8,8 @@ import com.agy.util.ProcessUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URL;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -28,7 +30,7 @@ public final class CoreReadyProbe {
     private static final String TAG = "CoreReadyProbe";
     public static final long READY_TIMEOUT_MS = 60000;
     /** Re-probe gap while the core boots. */
-    private static final long RETRY_SLEEP_MS = 60;
+    private static final long RETRY_SLEEP_MS = 25;
     private static volatile byte[] expectedCertDigest;
     private static volatile SSLSocketFactory pinnedLoopbackSocketFactory;
     private static final HostnameVerifier LOOPBACK_HOSTNAME_VERIFIER = new HostnameVerifier() {
@@ -41,10 +43,27 @@ public final class CoreReadyProbe {
     private CoreReadyProbe() {
     }
 
+    /** Fast TCP loopback pre-check so polling skips TLS handshake setup while the core is still binding. */
+    public static boolean isLoopbackPortOpen(int port, int timeoutMs) {
+        if (port <= 0 || port > 65535) {
+            return false;
+        }
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", port), Math.max(10, timeoutMs));
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
     public static boolean probeOnce(Context context, int port) {
         HttpsURLConnection connection = null;
         try {
             if (context == null) {
+                return false;
+            }
+            if (!isLoopbackPortOpen(port, 50)) {
+                ProcessUtils.sleep(RETRY_SLEEP_MS);
                 return false;
             }
             URL url = new URL(CoreUrl.startUrl(port));

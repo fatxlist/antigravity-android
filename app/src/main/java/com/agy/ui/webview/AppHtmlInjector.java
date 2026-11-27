@@ -7,6 +7,11 @@ import com.agy.theme.ThemeManager;
 
 import org.json.JSONObject;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /** Injects the boot config and the startup_ready script ahead of the app UI. */
 public final class AppHtmlInjector {
 
@@ -14,6 +19,8 @@ public final class AppHtmlInjector {
 
     /** Web layer generates the ready signal under generated/patches. */
     private static final String READY_SCRIPT = "./generated/patches/startup_ready.js";
+    private static final Pattern LOCAL_ASSET_ATTR =
+            Pattern.compile("((?:src|href)\\s*=\\s*[\"'])(\\./[^\"'?#]+\\.(?:js|css))([\"'])");
     private static final String CSP = "default-src 'self' https: data: blob:; "
             + "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; "
             + "style-src 'self' 'unsafe-inline' https:; "
@@ -26,13 +33,41 @@ public final class AppHtmlInjector {
     private AppHtmlInjector() {
     }
 
+    /** Appends `?v=<assetVersion>` to local `./...` `.js` and `.css` src/href attributes without touching query-bearing or external URLs. */
+    public static String appendAssetVersion(String html, String assetVersion) {
+        if (html == null || html.isEmpty() || assetVersion == null || assetVersion.isEmpty()) {
+            return html;
+        }
+        String encodedVersion;
+        try {
+            encodedVersion = URLEncoder.encode(assetVersion, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            encodedVersion = assetVersion.replaceAll("[^A-Za-z0-9._-]", "_");
+        }
+        Matcher matcher = LOCAL_ASSET_ATTR.matcher(html);
+        StringBuffer out = new StringBuffer(html.length() + 256);
+        while (matcher.find()) {
+            String replacement = Matcher.quoteReplacement(
+                    matcher.group(1) + matcher.group(2) + "?v=" + encodedVersion + matcher.group(3));
+            matcher.appendReplacement(out, replacement);
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
     public static String inject(String html, AndroidBridge bridge, ThemeManager theme) {
-        return inject(html, bridge, theme, 0, 0, 0, 0, false);
+        return inject(html, bridge, theme, 0, 0, 0, 0, false, null);
     }
 
     public static String inject(String html, AndroidBridge bridge, ThemeManager theme,
                                 int topDp, int bottomDp, int leftDp, int rightDp,
                                 boolean extraKeysVisible) {
+        return inject(html, bridge, theme, topDp, bottomDp, leftDp, rightDp, extraKeysVisible, null);
+    }
+
+    public static String inject(String html, AndroidBridge bridge, ThemeManager theme,
+                                int topDp, int bottomDp, int leftDp, int rightDp,
+                                boolean extraKeysVisible, String assetVersion) {
         int safeTop = Math.max(0, topDp);
         int safeBottom = extraKeysVisible ? 0 : Math.max(0, bottomDp);
         int safeLeft = Math.max(0, leftDp);
@@ -81,10 +116,13 @@ public final class AppHtmlInjector {
             return html;
         }
         int head = html.indexOf("<head>");
+        String result;
         if (head >= 0) {
             int at = head + "<head>".length();
-            return html.substring(0, at) + "\n" + boot + html.substring(at);
+            result = html.substring(0, at) + "\n" + boot + html.substring(at);
+        } else {
+            result = boot + html;
         }
-        return boot + html;
+        return appendAssetVersion(result, assetVersion);
     }
 }

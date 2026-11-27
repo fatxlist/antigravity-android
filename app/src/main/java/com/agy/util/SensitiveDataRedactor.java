@@ -53,14 +53,54 @@ public final class SensitiveDataRedactor {
         if (line == null || line.isEmpty()) {
             return line;
         }
-        Matcher urls = URL.matcher(line);
-        StringBuffer output = new StringBuffer();
-        while (urls.find()) {
-            urls.appendReplacement(output, Matcher.quoteReplacement(safeUrl(urls.group())));
+        String current = line;
+        if (current.contains("://")) {
+            Matcher urls = URL.matcher(current);
+            if (urls.find()) {
+                StringBuffer output = new StringBuffer(current.length());
+                do {
+                    urls.appendReplacement(output, Matcher.quoteReplacement(safeUrl(urls.group())));
+                } while (urls.find());
+                urls.appendTail(output);
+                current = output.toString();
+            }
         }
-        urls.appendTail(output);
-        String redacted = SECRET_FIELD.matcher(output.toString()).replaceAll("$1<redacted>");
+        if (!mightContainSensitiveField(current)) {
+            return current;
+        }
+        String redacted = SECRET_FIELD.matcher(current).replaceAll("$1<redacted>");
         redacted = SENSITIVE_HEADER.matcher(redacted).replaceAll("$1<redacted>");
         return BEARER.matcher(redacted).replaceAll("$1<redacted>");
+    }
+
+    private static boolean mightContainSensitiveField(String s) {
+        return containsIgnoreCase(s, "token")
+                || containsIgnoreCase(s, "secret")
+                || containsIgnoreCase(s, "pass")
+                || containsIgnoreCase(s, "key")
+                || containsIgnoreCase(s, "code")
+                || containsIgnoreCase(s, "verif")
+                || containsIgnoreCase(s, "state")
+                || containsIgnoreCase(s, "auth")
+                || containsIgnoreCase(s, "cookie")
+                || containsIgnoreCase(s, "bearer");
+    }
+
+    private static boolean containsIgnoreCase(String haystack, String lowerNeedle) {
+        int needleLen = lowerNeedle.length();
+        int maxStart = haystack.length() - needleLen;
+        if (maxStart < 0) {
+            return false;
+        }
+        char firstLower = lowerNeedle.charAt(0);
+        char firstUpper = Character.toUpperCase(firstLower);
+        for (int i = 0; i <= maxStart; i++) {
+            char c = haystack.charAt(i);
+            if ((c == firstLower || c == firstUpper)
+                    && haystack.regionMatches(true, i, lowerNeedle, 0, needleLen)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

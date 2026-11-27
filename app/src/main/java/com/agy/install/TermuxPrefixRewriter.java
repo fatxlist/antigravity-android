@@ -10,6 +10,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.regex.Matcher;
 
 /**
@@ -19,6 +20,7 @@ import java.util.regex.Matcher;
 public final class TermuxPrefixRewriter {
 
     private static final String TAG = "TermuxPrefixRewriter";
+    private static final long MAX_REWRITE_BYTES = 2L * 1024L * 1024L;
 
     private TermuxPrefixRewriter() {
     }
@@ -58,14 +60,37 @@ public final class TermuxPrefixRewriter {
     }
 
     private static boolean rewriteFile(File file, String newPrefix) {
-        byte[] full;
+        long len = file.length();
+        if (len < EnvPaths.PREFIX_MARKER.length() || len > MAX_REWRITE_BYTES) {
+            return false;
+        }
+        byte[] head = new byte[512];
+        int headLen;
         try (InputStream in = new FileInputStream(file)) {
-            full = IoUtil.readAllBytes(in);
+            headLen = IoUtil.readFully(in, head);
         } catch (IOException e) {
             return false;
         }
-        if (!TextFileDetector.isTextFile(full)) {
+        if (headLen <= 0) {
             return false;
+        }
+        byte[] headSlice = (headLen == head.length) ? head : Arrays.copyOf(head, headLen);
+        if (!TextFileDetector.isTextFile(headSlice)) {
+            return false;
+        }
+
+        byte[] full;
+        if (headLen == len) {
+            full = headSlice;
+        } else {
+            try (InputStream in = new FileInputStream(file)) {
+                full = IoUtil.readAllBytes(in);
+            } catch (IOException e) {
+                return false;
+            }
+            if (!TextFileDetector.isTextFile(full)) {
+                return false;
+            }
         }
         // Cheap marker test before the regex over the whole file.
         String content = new String(full, StandardCharsets.ISO_8859_1);

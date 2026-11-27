@@ -148,14 +148,42 @@ def _is_user_conversation(path, state):
     return False
 
 
+def _discover_transcript_paths(state, brain_glob=None):
+    """Return candidate transcript paths, caching directory discovery when brain/ is unchanged."""
+    if brain_glob:
+        return glob.glob(brain_glob)
+    brain_dir = os.path.join(HOME, ".gemini", "antigravity-app", "brain")
+    now = time.time()
+    try:
+        st = os.stat(brain_dir)
+        dir_sig = (getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
+    except OSError:
+        state["brain_dir_sig"] = None
+        state["brain_paths"] = []
+        return []
+
+    last_scan = state.get("brain_scan_ts", 0.0)
+    if state.get("brain_dir_sig") == dir_sig and (now - last_scan) < 30.0 and "brain_paths" in state:
+        return state["brain_paths"]
+
+    paths = glob.glob(BRAIN_GLOB)
+    state["brain_dir_sig"] = dir_sig
+    state["brain_scan_ts"] = now
+    state["brain_paths"] = paths
+    return paths
+
+
 def _check_conversation_turns(state, brain_glob=None):
     """Watch active user transcript.jsonl files and notify when an agent turn completes."""
     file_sig = state.setdefault("transcript_mtimes", {})
     working = state.setdefault("working_convos", set())
     notified_steps = state.setdefault("notified_steps", {})
+    user_cache = state.setdefault("user_convo_cache", {})
     initialized = state.get("transcript_initialized", False)
 
-    for path in glob.glob(brain_glob or BRAIN_GLOB):
+    for path in _discover_transcript_paths(state, brain_glob=brain_glob):
+        if user_cache.get(path) is False:
+            continue
         try:
             st = os.stat(path)
             sig = (getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
@@ -397,10 +425,26 @@ def daemon_loop():
             if changed:
                 save_tasks(tasks)
 
+            fast_poll = bool(watcher_state.get("working_convos"))
+            if not fast_poll:
+                for task in tasks:
+                    if not task.get("enabled", True):
+                        continue
+                    trig = task.get("trigger", {})
+                    ttype = trig.get("type", "delay")
+                    if ttype == "watch_file" or (
+                        ttype in ("interval", "github_pr", "github_issue", "battery")
+                        and trig.get("interval_sec", 300) <= 15
+                    ):
+                        fast_poll = True
+                        break
+            sleep_sec = 2 if fast_poll else 8
+
         except Exception as e:
             log(f"Daemon scheduler error: {e}")
+            sleep_sec = 2
 
-        STOP_EVENT.wait(2)
+        STOP_EVENT.wait(sleep_sec)
     try:
         if read_daemon_pid() == os.getpid():
             os.unlink(PID_FILE)

@@ -66,8 +66,24 @@ public final class AppLoader {
         }
         String origin = "https://127.0.0.1:" + port + "/";
         String historyUrl = origin + "?hostTheme=" + hostTheme;
+        String assetVersion = resolveAssetVersion(context);
         webView.loadDataWithBaseURL(origin,
-                AppHtmlInjector.inject(html, bridge, theme, topDp, bottomDp, leftDp, rightDp, extraKeysVisible),
+                AppHtmlInjector.inject(html, bridge, theme, topDp, bottomDp, leftDp, rightDp,
+                        extraKeysVisible, assetVersion),
                 "text/html", "UTF-8", historyUrl);
+    }
+
+    private static String resolveAssetVersion(Context context) {
+        String base = com.agy.BuildConfig.APP_VERSION_CODE + "_" + com.agy.BuildConfig.CORE_VERSION;
+        if (context == null) {
+            return base;
+        }
+        try {
+            long lastUpdate = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).lastUpdateTime;
+            return base + "_" + lastUpdate;
+        } catch (Exception ignored) {
+            return base;
+        }
     }
 }

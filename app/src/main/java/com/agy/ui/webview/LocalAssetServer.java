@@ -6,7 +6,6 @@ import android.util.Log;
 import android.webkit.WebResourceResponse;
 
 import com.agy.util.MimeTypes;
-import com.agy.util.PathSafety;
 import com.agy.util.TrustedCoreOrigin;
 
 import java.io.BufferedInputStream;
@@ -24,8 +23,41 @@ public final class LocalAssetServer {
 
     private static final String TAG = "WebViewHost";
 
+    private static final class WebRoot {
+        final File filesDir;
+        final File webDir;
+        final String canonicalWeb;
+
+        WebRoot(File filesDir, File webDir, String canonicalWeb) {
+            this.filesDir = filesDir;
+            this.webDir = webDir;
+            this.canonicalWeb = canonicalWeb;
+        }
+    }
+
+    private volatile WebRoot cachedWebRoot;
+
+    private WebRoot resolveWebRoot(Context context) {
+        File filesDir = context.getFilesDir();
+        WebRoot root = cachedWebRoot;
+        if (root != null && filesDir.equals(root.filesDir)) {
+            return root;
+        }
+        try {
+            File webDir = new File(filesDir, "web");
+            String canonicalWeb = webDir.getCanonicalPath();
+            WebRoot resolved = new WebRoot(filesDir, webDir, canonicalWeb);
+            if (webDir.isDirectory()) {
+                cachedWebRoot = resolved;
+            }
+            return resolved;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public WebResourceResponse intercept(Context context, Uri uri, String method, int enginePort) {
-        if (uri == null || !"GET".equalsIgnoreCase(method)) {
+        if (context == null || uri == null || !"GET".equalsIgnoreCase(method)) {
             return null;
         }
         if (!TrustedCoreOrigin.matches(uri, enginePort)) {
@@ -40,14 +72,16 @@ public final class LocalAssetServer {
                 || path.contains("connect-websocket")) {
             return null;
         }
+        WebRoot root = resolveWebRoot(context);
+        if (root == null) {
+            return null;
+        }
         String relPath = path.startsWith("/") ? path.substring(1) : path;
-        File webDir = new File(context.getFilesDir(), "web");
-        File target = new File(webDir, relPath);
+        File target = new File(root.webDir, relPath);
         try {
-            String canonicalWeb = webDir.getCanonicalPath();
             String canonicalTarget = target.getCanonicalPath();
-            if (!canonicalTarget.startsWith(canonicalWeb + File.separator)
-                    && !canonicalTarget.equals(canonicalWeb)) {
+            if (!canonicalTarget.startsWith(root.canonicalWeb + File.separator)
+                    && !canonicalTarget.equals(root.canonicalWeb)) {
                 return null;
             }
         } catch (Exception e) {
@@ -59,8 +93,12 @@ public final class LocalAssetServer {
                 String encoding = MimeTypes.isTextMime(mime) ? "UTF-8" : null;
                 Map<String, String> headers = new HashMap<>();
                 headers.put("Access-Control-Allow-Origin", "*");
-                // Avoid serving stale assets from WebView HTTP cache after APK updates.
-                headers.put("Cache-Control", "no-cache");
+                String versionParam = uri.getQueryParameter("v");
+                // Versioned asset URLs (?v=...) allow Chromium/V8 to persist compiled bytecode cache across restarts.
+                headers.put("Cache-Control",
+                        (versionParam != null && !versionParam.isEmpty())
+                                ? "public, max-age=31536000, immutable"
+                                : "no-cache");
                 headers.put("Content-Length", String.valueOf(target.length()));
                 InputStream bis = new BufferedInputStream(new FileInputStream(target), 64 * 1024);
                 return new WebResourceResponse(mime, encoding, 200, "OK", headers, bis);

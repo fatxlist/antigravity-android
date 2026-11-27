@@ -103,6 +103,7 @@ public final class CoreProcessSupervisor {
             try {
                 CoreRuntimeState.lastError = null;
                 CoreRuntimeState.restarting = false;
+                CoreRuntimeState.notifyStateChanged();
                 Process proc = CoreLauncher.launch(runtime, appContext.getFilesDir());
                 process = proc;
 
@@ -121,6 +122,7 @@ public final class CoreProcessSupervisor {
                         CoreRuntimeState.lastError =
                                 "core did not become ready within " + CoreReadyProbe.READY_TIMEOUT_MS + "ms";
                         CoreLogWriter.writeLine(log, CoreRuntimeState.lastError);
+                        CoreRuntimeState.notifyStateChanged();
                     }
                     destroy(proc);
                     break;
@@ -150,6 +152,7 @@ public final class CoreProcessSupervisor {
                             + " times; giving up (last exit code " + code + ")"
                             + (tail.isEmpty() ? "" : "\n--- core.log tail ---\n" + tail);
                     CoreLogWriter.writeLine(log, CoreRuntimeState.lastError);
+                    CoreRuntimeState.notifyStateChanged();
                     com.agy.log.CrashRecorder.recordCrash(appContext, code, System.currentTimeMillis() - readyAt, CoreRuntimeState.lastError, logBuffer);
                     break;
                 }
@@ -161,6 +164,7 @@ public final class CoreProcessSupervisor {
                         + (tail.isEmpty() ? "" : "\n--- core.log tail ---\n" + tail);
                 Log.w(TAG, CoreRuntimeState.lastError);
                 CoreLogWriter.writeLine(log, CoreRuntimeState.lastError);
+                CoreRuntimeState.notifyStateChanged();
                 com.agy.log.CrashRecorder.recordCrash(appContext, code, System.currentTimeMillis() - readyAt, CoreRuntimeState.lastError, logBuffer);
                 CoreLogWriter.closeQuietly(log);
                 log = null;
@@ -172,6 +176,7 @@ public final class CoreProcessSupervisor {
                 Log.e(TAG, "core start failed", e);
                 CoreRuntimeState.lastError = ErrorText.describe(e);
                 CoreLogWriter.writeLine(log, "core start failed: " + CoreRuntimeState.lastError);
+                CoreRuntimeState.notifyStateChanged();
                 // install/launch failure: fail-closed, user retries from the splash.
                 break;
             } finally {
@@ -195,6 +200,7 @@ public final class CoreProcessSupervisor {
                 CoreRuntimeState.lastError = "core process exited before it became ready (exit code " + code + ")"
                         + (lastLogs.isEmpty() ? "" : "\n--- core.log tail ---\n" + lastLogs);
                 CoreLogWriter.writeLine(log, CoreRuntimeState.lastError);
+                CoreRuntimeState.notifyStateChanged();
                 return false;
             }
             if (CoreReadyProbe.probeOnce(appContext, port)) {
@@ -203,6 +209,7 @@ public final class CoreProcessSupervisor {
                 CoreRuntimeState.lastError = null;
                 CoreRuntimeState.restarting = false;
                 CoreRuntimeState.readyGeneration++;
+                CoreRuntimeState.notifyStateChanged();
                 writeCoreStateFile(appContext.getFilesDir(), port, csrf,
                         SystemGatewayServer.getActivePort(), extractPid(proc), readyAt);
                 String readyStatus = "core ready on 127.0.0.1:" + port;
@@ -224,10 +231,15 @@ public final class CoreProcessSupervisor {
                 if (logBuffer != null) {
                     logBuffer.appendLine(safeLine);
                 }
-                CoreLogWriter.writeLine(log, safeLine);
+                boolean flushNow = safeLine.contains("panic:")
+                        || safeLine.contains("fatal")
+                        || safeLine.contains("FATAL")
+                        || safeLine.contains("ERROR")
+                        || safeLine.contains("SIG");
+                CoreLogWriter.writeRedactedLine(log, safeLine, flushNow);
                 openUrlWatcher.handleStreamLine(line);
                 if (coreEventWatcher != null) {
-                    coreEventWatcher.handleStreamLine(line);
+                    coreEventWatcher.handleRedactedStreamLine(safeLine);
                 }
             }
         } catch (Exception e) {

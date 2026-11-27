@@ -407,7 +407,10 @@ function isLoopbackRpcUrl(url) {
 function wrapStreamingFetch(origFetch, url, opts) {
   var callerSignal = (opts && opts.signal) || (url && typeof url === 'object' && url.signal) || null;
   var streamCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  var rejectPendingRead = null;
+  var resolveResume = null;
+  var resumeInterrupter = new Promise(function (resolve) {
+    resolveResume = resolve;
+  });
   var closedByResume = false;
   var realReader = null;
   var entry = {
@@ -415,26 +418,26 @@ function wrapStreamingFetch(origFetch, url, opts) {
     close: closeOnResume
   };
 
+  function resolveResumeOnce() {
+    if (resolveResume) {
+      var r = resolveResume;
+      resolveResume = null;
+      try { r({ done: true, value: undefined }); } catch (e) {}
+    }
+  }
+
   function onCallerAbort() {
     activeStreamClosers.delete(entry);
     if (streamCtrl) {
       try { streamCtrl.abort(callerSignal && callerSignal.reason); } catch (e) {}
     }
-    if (rejectPendingRead) {
-      var r = rejectPendingRead;
-      rejectPendingRead = null;
-      try { r({ done: true, value: undefined }); } catch (e) {}
-    }
+    resolveResumeOnce();
   }
 
   function closeOnResume() {
     closedByResume = true;
     activeStreamClosers.delete(entry);
-    if (rejectPendingRead) {
-      var r = rejectPendingRead;
-      rejectPendingRead = null;
-      try { r({ done: true, value: undefined }); } catch (e) {}
-    }
+    resolveResumeOnce();
     if (realReader) {
       try { realReader.cancel('agy:host-resume'); } catch (e) {}
     }
@@ -477,11 +480,7 @@ function wrapStreamingFetch(origFetch, url, opts) {
           controller.close();
           return Promise.resolve();
         }
-        var resumeInterrupter = new Promise(function (resolve) {
-          rejectPendingRead = resolve;
-        });
         return Promise.race([realReader.read(), resumeInterrupter]).then(function (res) {
-          rejectPendingRead = null;
           if (!res || res.done || closedByResume) {
             activeStreamClosers.delete(entry);
             controller.close();
@@ -489,7 +488,6 @@ function wrapStreamingFetch(origFetch, url, opts) {
             controller.enqueue(res.value);
           }
         }).catch(function (err) {
-          rejectPendingRead = null;
           activeStreamClosers.delete(entry);
           if (closedByResume) {
             controller.close();
@@ -499,7 +497,6 @@ function wrapStreamingFetch(origFetch, url, opts) {
         });
       },
       cancel: function (reason) {
-        rejectPendingRead = null;
         activeStreamClosers.delete(entry);
         if (realReader) {
           try { return realReader.cancel(reason); } catch (e) {}

@@ -922,6 +922,8 @@ function createMockDom() {
   assert.ok(injectedStyle.textContent.includes('--agy-safe-top'), 'Safe-area top CSS variable must be defined');
   assert.ok(injectedStyle.textContent.includes('--agy-safe-bottom'), 'Safe-area bottom CSS variable must be defined');
   assert.ok(injectedStyle.textContent.includes('html.agy-extra-keys'), 'Extra-keys bottom safe-area override must be present');
+  assert.ok(injectedStyle.textContent.includes('content-visibility: auto'), 'Chat articles must use content-visibility: auto for long-thread scroll performance');
+  assert.ok(injectedStyle.textContent.includes('contain-intrinsic-block-size: auto 180px'), 'Chat articles must reserve intrinsic height with contain-intrinsic-block-size');
 
   let resizeCalls = 0;
   let vvResizeCalls = 0;
@@ -1007,4 +1009,117 @@ function createMockDom() {
 
   assert.ok(syncedColors.includes('#ffffff'), 'Surface sync should read [data-testid="mobile-layout"] background before body');
   console.log('test theme_sync.js: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 7. Test mobile_bridge.js Settings MutationObserver streaming leaf filter
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document, body } = createMockDom();
+  const rootEl = document.createElement('div');
+  rootEl.id = 'root';
+  body.appendChild(rootEl);
+
+  const scheduled = [];
+  let timerSeq = 1;
+  windowObj.setTimeout = (_fn, delay) => {
+    scheduled.push(delay);
+    return timerSeq++;
+  };
+  windowObj.clearTimeout = () => {};
+
+  const observers = [];
+  windowObj.MutationObserver = class MockMutationObserver {
+    constructor(cb) {
+      this.cb = cb;
+      observers.push(this);
+    }
+    observe() {}
+    disconnect() {}
+  };
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'mobile_bridge.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  assert.equal(observers.length, 1, 'mobile_bridge should install one Settings MutationObserver');
+  const obs = observers[0];
+
+  // Streaming leaf elements (SPAN, P, CODE) must NOT schedule Settings DOM scans
+  const spanNode = document.createElement('span');
+  const codeNode = document.createElement('code');
+  obs.cb([{ addedNodes: [spanNode, codeNode] }]);
+  assert.equal(scheduled.length, 0, 'Streaming leaf nodes should be skipped without scheduling Settings scan');
+
+  // Container carrying .agy-card SHOULD schedule a 200ms debounced Settings scan
+  const cardNode = document.createElement('div');
+  cardNode.className = 'agy-card';
+  obs.cb([{ addedNodes: [cardNode] }]);
+  assert.deepEqual(scheduled, [200], 'Adding .agy-card should schedule Settings scan with 200ms debounce');
+
+  // Once #ag-mb-settings-section is mounted and connected, observer should early-return
+  const mountedSec = document.createElement('div');
+  mountedSec.id = 'ag-mb-settings-section';
+  body.appendChild(mountedSec);
+  obs.cb([{ addedNodes: [cardNode] }]);
+  assert.equal(scheduled.length, 1, 'Mounted #ag-mb-settings-section should skip re-scanning mutations');
+
+  console.log('test mobile_bridge.js observer filter: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 8. Test bridge.core.js wrapStreamingFetch per-stream recovery & multi-chunk
+// ---------------------------------------------------------------------------
+{
+  const { windowObj } = createMockDom();
+  const winListeners = new Map();
+  windowObj.location = { search: '?port=45157', href: 'https://127.0.0.1:45157/' };
+  windowObj.ReadableStream = globalThis.ReadableStream;
+  windowObj.Response = globalThis.Response;
+  windowObj.AbortController = globalThis.AbortController;
+  windowObj.addEventListener = (type, fn) => {
+    if (!winListeners.has(type)) winListeners.set(type, []);
+    winListeners.get(type).push(fn);
+  };
+  windowObj.dispatchEvent = (ev) => {
+    for (const fn of (winListeners.get(ev.type) || [])) fn(ev);
+    return true;
+  };
+
+  let controllerRef;
+  windowObj.fetch = async () => {
+    const body = new globalThis.ReadableStream({
+      start(controller) {
+        controllerRef = controller;
+        controller.enqueue(new Uint8Array([1, 2]));
+        controller.enqueue(new Uint8Array([3, 4]));
+      }
+    });
+    return new globalThis.Response(body, { status: 200, statusText: 'OK' });
+  };
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'bridge.core.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  const resp = await windowObj.fetch(
+    'https://127.0.0.1:45157/exa.language_server_pb.LanguageServerService/StreamAgentStateUpdates',
+    { method: 'POST', body: '{}' }
+  );
+  assert.equal(windowObj.__agBridgeCore.getActiveStreamCount(), 1, 'Streaming RPC should register active stream closer');
+
+  const reader = resp.body.getReader();
+  const c1 = await reader.read();
+  assert.equal(c1.done, false);
+  assert.deepEqual(Array.from(c1.value), [1, 2]);
+  const c2 = await reader.read();
+  assert.equal(c2.done, false);
+  assert.deepEqual(Array.from(c2.value), [3, 4]);
+
+  // Next read awaits server chunk or host resume; dispatching agy:host-resume must close cleanly
+  const pendingRead = reader.read();
+  windowObj.dispatchEvent(new windowObj.Event('agy:host-resume'));
+  const c3 = await pendingRead;
+  assert.equal(c3.done, true, 'agy:host-resume must resolve pending wrapped read cleanly with done: true');
+  assert.equal(windowObj.__agBridgeCore.getActiveStreamCount(), 0, 'Active stream closer must be removed after resume');
+
+  console.log('test bridge.core.js streaming recovery: OK');
 }

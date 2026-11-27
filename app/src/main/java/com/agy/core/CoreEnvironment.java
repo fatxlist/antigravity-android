@@ -1,5 +1,7 @@
 package com.agy.core;
 
+import android.app.ActivityManager;
+import android.content.Context;
 import android.util.Log;
 
 import com.agy.runtime.RuntimeManager;
@@ -60,6 +62,18 @@ public final class CoreEnvironment {
         String godebug = env.get("GODEBUG");
         env.put("GODEBUG", godebug == null || godebug.isEmpty()
                 ? "netdns=go" : godebug + ",netdns=go");
+
+        // Mobile Go runtime tuning: keep RSS bounded below Android LMKD thresholds and cap big.LITTLE thrashing.
+        if (!env.containsKey("GOMEMLIMIT") || env.get("GOMEMLIMIT").isEmpty()) {
+            long memMiB = computeGoMemLimitMiB(queryTotalDeviceMemoryBytes(rm.appContext()));
+            env.put("GOMEMLIMIT", memMiB + "MiB");
+        }
+        if (!env.containsKey("GOGC") || env.get("GOGC").isEmpty()) {
+            env.put("GOGC", "75");
+        }
+        if (!env.containsKey("GOMAXPROCS") || env.get("GOMAXPROCS").isEmpty()) {
+            env.put("GOMAXPROCS", String.valueOf(computeGoMaxProcs(Runtime.getRuntime().availableProcessors())));
+        }
         // Emits "ANTIGRAVITY_OPEN_URL: <url>" directly to stdout from language_server
         // so OpenUrlWatcher captures the auth URL and opens the external browser reliably.
         env.put("ANTIGRAVITY_VSCODE_HOST", "1");
@@ -84,5 +98,38 @@ public final class CoreEnvironment {
         // RuntimeManager.coreCommand() already preloads it into language_server via the
         // glibc loader's CLI argument: --preload <path>/liblse_compat.so.
         env.remove("LD_PRELOAD");
+    }
+
+    /** Computes a bounded Go soft memory limit (384..1024 MiB, ~25% of device RAM, default 512 MiB). */
+    public static long computeGoMemLimitMiB(long totalMemBytes) {
+        if (totalMemBytes <= 0L) {
+            return 512L;
+        }
+        long quarterMiB = (totalMemBytes / (1024L * 1024L)) / 4L;
+        return Math.max(384L, Math.min(1024L, quarterMiB));
+    }
+
+    /** Caps GOMAXPROCS between 2 and 6 cores (default 4) to avoid big.LITTLE scheduler contention. */
+    public static int computeGoMaxProcs(int availableCpus) {
+        if (availableCpus <= 0) {
+            return 4;
+        }
+        return Math.max(2, Math.min(availableCpus, 6));
+    }
+
+    private static long queryTotalDeviceMemoryBytes(Context context) {
+        if (context == null) {
+            return 0L;
+        }
+        try {
+            ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+                am.getMemoryInfo(mi);
+                return mi.totalMem;
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0L;
     }
 }

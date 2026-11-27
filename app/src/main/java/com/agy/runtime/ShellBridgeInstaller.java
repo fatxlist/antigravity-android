@@ -12,6 +12,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /**
  * Materializes the bionic bridges in getFilesDir()/runtime/bin. Must run after
@@ -45,6 +47,10 @@ public final class ShellBridgeInstaller {
     }
 
     public static synchronized void installFallbackBridges(File bin, android.content.Context context) {
+        installFallbackBridges(bin, context, !new File(bin, BRIDGE_MARKER).isFile());
+    }
+
+    private static synchronized void installFallbackBridges(File bin, android.content.Context context, boolean normalizeScripts) {
         if (bin == null) return;
         if (!bin.isDirectory() && !bin.mkdirs() && !bin.isDirectory()) {
             Log.w(TAG, "cannot create " + bin + "; skipping fallback bridges");
@@ -60,7 +66,9 @@ public final class ShellBridgeInstaller {
             writeScript(sh, "#!/system/bin/sh\n# AGY fallback shell\nexec /system/bin/sh \"$@\"\n");
         }
         writeTorchShims(bin, context);
-        normalizeRuntimeBinScripts(bin);
+        if (normalizeScripts) {
+            normalizeRuntimeBinScripts(bin);
+        }
         if (context != null) {
             File prefix = EnvInstaller.prefix(context);
             File filesDir = context.getFilesDir();
@@ -156,7 +164,7 @@ public final class ShellBridgeInstaller {
             return;
         }
         // Always ensure fallback shells and shims exist FIRST
-        installFallbackBridges(bin, rm.appContext());
+        installFallbackBridges(bin, rm.appContext(), force || !new File(bin, BRIDGE_MARKER).isFile());
         installOpenUrlShims(bin, rm.appContext());
 
         File prefix = EnvInstaller.prefix(rm.appContext());
@@ -530,8 +538,19 @@ public final class ShellBridgeInstaller {
     }
 
     private static void writeScript(File bridge, String script) {
+        byte[] desired = script.getBytes(StandardCharsets.UTF_8);
+        if (bridge.isFile() && bridge.length() == desired.length && bridge.canExecute()) {
+            byte[] existing = new byte[desired.length];
+            try (InputStream in = new FileInputStream(bridge)) {
+                int read = com.agy.util.IoUtil.readFully(in, existing);
+                if (read == desired.length && Arrays.equals(existing, desired)) {
+                    return;
+                }
+            } catch (IOException ignored) {
+            }
+        }
         try (OutputStream out = new FileOutputStream(bridge)) {
-            out.write(script.getBytes(Charset.forName("UTF-8")));
+            out.write(desired);
         } catch (IOException e) {
             Log.w(TAG, "cannot write bridge " + bridge + ": " + e.getMessage());
             return;

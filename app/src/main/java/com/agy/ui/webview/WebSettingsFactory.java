@@ -56,14 +56,6 @@ public final class WebSettingsFactory {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
-        // Offscreen preraster: keeps tiles GPU-ready off the main thread (API 23+).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                settings.setOffscreenPreRaster(true);
-            } catch (Exception e) {
-                Log.w(TAG, "setOffscreenPreRaster failed", e);
-            }
-        }
     }
 
     public static void applyDesktopMode(WebView view, boolean desktop) {

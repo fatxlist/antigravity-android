@@ -5,7 +5,11 @@ import android.content.Context;
 import com.agy.core.CoreEnvironment;
 import com.agy.core.CoreRuntimeState;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -19,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RuntimeManager {
 
     public static final String CORE_VERSION = RuntimeConfig.CORE_VERSION;
+    private static volatile Boolean cachedNativeLseSupported;
 
     private final Context appContext;
     private final String csrfToken;
@@ -114,7 +119,7 @@ public final class RuntimeManager {
         cmd.add(loader.getAbsolutePath());
         cmd.add("--library-path");
         cmd.add(lib.getAbsolutePath());
-        if (lseCompat.isFile()) {
+        if (lseCompat.isFile() && !isNativeLseSupported()) {
             cmd.add("--preload");
             cmd.add(lseCompat.getAbsolutePath());
         }
@@ -174,5 +179,59 @@ public final class RuntimeManager {
 
     public synchronized void writeNetworkConfig() {
         NetworkConfigWriter.write(appContext);
+    }
+
+    /** Returns true iff /proc/cpuinfo advertises all ARMv8.1-8.4 features emulated by liblse_compat.so. */
+    public static boolean cpuSupportsAllEmulatedFeatures(String cpuInfoText) {
+        if (cpuInfoText == null || cpuInfoText.isEmpty()) {
+            return false;
+        }
+        Set<String> features = new HashSet<>();
+        String[] lines = cpuInfoText.split("\n");
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String key = line.substring(0, colon).trim();
+            if (!"Features".equals(key)) {
+                continue;
+            }
+            String[] tokens = line.substring(colon + 1).trim().split("\\s+");
+            for (String tok : tokens) {
+                if (!tok.isEmpty()) {
+                    features.add(tok);
+                }
+            }
+        }
+        return features.contains("atomics")
+                && features.contains("asimddp")
+                && features.contains("asimdrdm")
+                && features.contains("fcma")
+                && features.contains("lrcpc")
+                && features.contains("ilrcpc");
+    }
+
+    private static boolean isNativeLseSupported() {
+        Boolean cached = cachedNativeLseSupported;
+        if (cached != null) {
+            return cached.booleanValue();
+        }
+        boolean supported = false;
+        try (BufferedReader br = new BufferedReader(new FileReader("/proc/cpuinfo"))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.startsWith("Features")) {
+                    sb.append(line).append('\n');
+                    break;
+                }
+            }
+            supported = cpuSupportsAllEmulatedFeatures(sb.toString());
+        } catch (Throwable ignored) {
+            supported = false;
+        }
+        cachedNativeLseSupported = Boolean.valueOf(supported);
+        return supported;
     }
 }

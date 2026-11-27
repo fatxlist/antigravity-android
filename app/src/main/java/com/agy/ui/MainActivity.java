@@ -72,8 +72,6 @@ public class MainActivity extends Activity
     public static final int REQUEST_POST_NOTIFICATIONS = 1005;
     private static final String PREF_ASKED_NOTIFICATIONS = "asked_post_notifications";
     private static final long SPLASH_TIMEOUT_MS = 60000;
-    private static final long POLL_STARTUP_INTERVAL_MS = 50;
-    private static final long POLL_READY_INTERVAL_MS = 1000;
 
     public static volatile MainActivity activeActivity;
 
@@ -121,17 +119,27 @@ public class MainActivity extends Activity
         }
     };
 
-    /**
-     * Runs for the whole activity life: it drives the splash, loads the app on
-     * ready, and keeps watching for a post-ready core death.
-     */
-    private final Runnable pollServer = new Runnable() {
+    private final Runnable coreWatchTask = new Runnable() {
         @Override
         public void run() {
-            watchCore();
             if (activityResumed) {
-                handler.postDelayed(this, appLoaded
-                        ? POLL_READY_INTERVAL_MS : POLL_STARTUP_INTERVAL_MS);
+                watchCore();
+            }
+        }
+    };
+
+    private final Runnable coreStateListener = new Runnable() {
+        @Override
+        public void run() {
+            handler.post(coreWatchTask);
+        }
+    };
+
+    private final Runnable splashDeadlineTask = new Runnable() {
+        @Override
+        public void run() {
+            if (activityResumed) {
+                watchCore();
             }
         }
     };
@@ -139,6 +147,7 @@ public class MainActivity extends Activity
     private void watchCore() {
         String error = CoreRuntimeState.lastError;
         if (error != null) {
+            handler.removeCallbacks(splashDeadlineTask);
             if (CoreRuntimeState.restarting) {
                 splash.showTransient(error);
             } else {
@@ -147,6 +156,7 @@ public class MainActivity extends Activity
             return;
         }
         if (CoreRuntimeState.serverUrl != null && webViewHost != null) {
+            handler.removeCallbacks(splashDeadlineTask);
             int generation = CoreRuntimeState.readyGeneration;
             if (!appLoaded || (loadedGeneration > 0 && generation != loadedGeneration)) {
                 appLoaded = true;
@@ -164,9 +174,14 @@ public class MainActivity extends Activity
             }
             return;
         }
-        if (!appLoaded && CoreRuntimeState.serverUrl == null && !splash.isFatalShown()
-                && System.currentTimeMillis() > splashDeadline) {
-            splash.showFatalError("core did not start within " + (SPLASH_TIMEOUT_MS / 1000) + "s");
+        if (!appLoaded && CoreRuntimeState.serverUrl == null && !splash.isFatalShown()) {
+            long remaining = splashDeadline - System.currentTimeMillis();
+            if (remaining <= 0) {
+                splash.showFatalError("core did not start within " + (SPLASH_TIMEOUT_MS / 1000) + "s");
+            } else {
+                handler.removeCallbacks(splashDeadlineTask);
+                handler.postDelayed(splashDeadlineTask, remaining);
+            }
         }
     }
 
@@ -355,6 +370,7 @@ public class MainActivity extends Activity
     /** Retry re-runs install + start: stop the service, then start it again. */
     private void retryCore() {
         handler.removeCallbacks(splashWatchdog);
+        handler.removeCallbacks(splashDeadlineTask);
         splash.clearFatal();
         appLoaded = false;
         pageFinished = false;
@@ -370,7 +386,13 @@ public class MainActivity extends Activity
             }
         } catch (Exception ignored) {
         }
-        handler.postDelayed(this::startCoreService, 400);
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                startCoreService();
+                watchCore();
+            }
+        }, 400);
     }
 
     /**
@@ -732,6 +754,9 @@ public class MainActivity extends Activity
     protected void onDestroy() {
         activityResumed = false;
         uiReady = false;
+        CoreRuntimeState.removeStateListener(coreStateListener);
+        handler.removeCallbacks(coreWatchTask);
+        handler.removeCallbacks(splashDeadlineTask);
         dismissLocalPreview();
         if (voiceDictation != null) {
             voiceDictation.destroy();
@@ -812,7 +837,9 @@ public class MainActivity extends Activity
         if (awaitingStorageSettingsReturn) {
             awaitingStorageSettingsReturn = false;
         }
-        handler.removeCallbacks(pollServer);
+        CoreRuntimeState.removeStateListener(coreStateListener);
+        handler.removeCallbacks(coreWatchTask);
+        handler.removeCallbacks(splashDeadlineTask);
         boolean keepWebViewAlive = VoiceForegroundService.isActive()
                 || (webViewHost != null && webViewHost.hasPendingAudioPermissionRequest());
         if (webViewHost != null && !keepWebViewAlive) {
@@ -839,8 +866,9 @@ public class MainActivity extends Activity
         }
         refreshTheme();
         requestNotificationPermissionIfNeeded();
-        handler.removeCallbacks(pollServer);
-        handler.post(pollServer);
+        CoreRuntimeState.addStateListener(coreStateListener);
+        handler.removeCallbacks(coreWatchTask);
+        watchCore();
     }
 
     private void requestNotificationPermissionIfNeeded() {

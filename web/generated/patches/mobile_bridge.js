@@ -2256,13 +2256,54 @@ function findSettingsInjectionHost() {
     var screen = section && section.parentNode ? section.parentNode : null;
     if (!screen || screen === doc.body || screen === doc.documentElement) continue;
 
-    var txt = ((card.textContent || '') + ' ' + (section.textContent || '') + ' ' + (screen.textContent || '')).slice(0, 800);
+    var cardTxt = (card.textContent || '').slice(0, 400);
+    var secHead = (section && section.firstElementChild && section.firstElementChild.textContent)
+      ? section.firstElementChild.textContent.slice(0, 200)
+      : '';
+    var txt = cardTxt + ' ' + secHead;
+    if (!/\b(Appearance|Application)\b/.test(txt) || !/\b(Theme|Contrast|Font|General|Remote Control|Updates|Desktop Mode)\b/.test(txt)) {
+      txt = cardTxt + ' ' + ((section && section.textContent || '') + ' ' + (screen.textContent || '')).slice(0, 800);
+    }
     if (/\b(Appearance|Application)\b/.test(txt) && /\b(Theme|Contrast|Font|General|Remote Control|Updates|Desktop Mode)\b/.test(txt)) {
       preferredHost = screen;
       break;
     }
   }
   return preferredHost;
+}
+
+var STREAMING_LEAF_TAGS = {
+  SPAN: true, P: true, CODE: true, PRE: true, LI: true, UL: true, OL: true,
+  A: true, BR: true, STRONG: true, EM: true, B: true, I: true,
+  SVG: true, PATH: true, G: true, CIRCLE: true, RECT: true, LINE: true,
+  TR: true, TD: true, TH: true, THEAD: true, TBODY: true, HR: true, IMG: true,
+  H1: true, H2: true, H3: true, H4: true, H5: true, H6: true, BLOCKQUOTE: true
+};
+
+function shouldScanMutationsForSettings(mutations) {
+  if (!Array.isArray(mutations) || mutations.length === 0) {
+    return true;
+  }
+  for (var i = 0; i < mutations.length; i++) {
+    var m = mutations[i];
+    var added = m && m.addedNodes;
+    if (!added || !added.length) continue;
+    for (var j = 0; j < added.length; j++) {
+      var node = added[j];
+      if (!node || node.nodeType !== 1) continue;
+      if (isOwnBridgeElement(node)) continue;
+      var cls = typeof node.className === 'string' ? node.className : '';
+      if (cls.indexOf('agy-card') !== -1 || cls.indexOf('settings') !== -1) {
+        return true;
+      }
+      var tag = node.tagName ? String(node.tagName).toUpperCase() : '';
+      if (STREAMING_LEAF_TAGS[tag]) continue;
+      if (typeof node.querySelector === 'function' && node.querySelector('.agy-card')) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function tryInjectSettingsSection() {
@@ -2300,12 +2341,15 @@ function tryInjectSettingsSection() {
   return true;
 }
 
-function scheduleSettingsScan() {
+function scheduleSettingsScan(mutations) {
+  var existing = doc && doc.getElementById('ag-mb-settings-section');
+  if (existing && existing.isConnected) return;
+  if (!shouldScanMutationsForSettings(mutations)) return;
   if (settingsScanTimer) return;
   settingsScanTimer = setTimeout(function () {
     settingsScanTimer = 0;
     tryInjectSettingsSection();
-  }, 100);
+  }, 200);
 }
 
 function setDrawerOpen(open) {

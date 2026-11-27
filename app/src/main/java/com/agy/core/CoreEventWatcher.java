@@ -73,8 +73,16 @@ public final class CoreEventWatcher {
         if (rawLine == null || rawLine.isEmpty()) {
             return;
         }
+        handleRedactedStreamLine(SensitiveDataRedactor.redactLine(rawLine));
+    }
+
+    /** Inspects a pre-redacted stream line without running redaction twice. */
+    public void handleRedactedStreamLine(String redactedLine) {
+        if (redactedLine == null || redactedLine.isEmpty()) {
+            return;
+        }
         try {
-            String safeLine = SensitiveDataRedactor.redactLine(rawLine).trim();
+            String safeLine = redactedLine.trim();
             if (safeLine.isEmpty()) {
                 return;
             }

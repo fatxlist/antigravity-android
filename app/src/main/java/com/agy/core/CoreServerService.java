@@ -54,6 +54,7 @@ public final class CoreServerService extends Service {
         CoreRuntimeState.restarting = false;
         CoreRuntimeState.lastError = null;
         CoreRuntimeState.serverUrl = null;
+        CoreRuntimeState.notifyStateChanged();
 
         wakeLock = new WakeLockHolder();
         wakeLock.acquire(this);
@@ -253,6 +254,7 @@ public final class CoreServerService extends Service {
                 if (CoreRuntimeState.lastError == null) {
                     CoreRuntimeState.lastError = "core supervisor stopped unexpectedly";
                 }
+                CoreRuntimeState.notifyStateChanged();
                 if (wakeLock != null) {
                     wakeLock.release();
                 }
@@ -293,6 +295,7 @@ public final class CoreServerService extends Service {
         CoreRuntimeState.serverUrl = null;
         CoreRuntimeState.lastError = null;
         CoreRuntimeState.restarting = false;
+        CoreRuntimeState.notifyStateChanged();
         CoreProcessSupervisor.clearCoreStateFile(getFilesDir());
         super.onDestroy();
     }

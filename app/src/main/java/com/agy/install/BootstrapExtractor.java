@@ -3,14 +3,15 @@ package com.agy.install;
 import android.content.res.AssetManager;
 import android.util.Log;
 
-import com.agy.util.AssetUnpacker;
 import com.agy.util.IoUtil;
-import com.agy.util.Sha256;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.MessageDigest;
 
 /** Stages and extracts the pinned bootstrap; fallback extraction must preserve its symlinks. */
 public final class BootstrapExtractor {
@@ -29,13 +30,10 @@ public final class BootstrapExtractor {
         File tmp = null;
         try {
             tmp = File.createTempFile("bootstrap", ".tar", prefix);
-            AssetUnpacker.copyFile(assets, asset, tmp);
-            if (expectedSha256 != null) {
-                String actual = Sha256.of(tmp);
-                if (!expectedSha256.equals(actual)) {
-                    throw new IOException("bootstrap sha256 mismatch: got " + actual
-                            + " want " + expectedSha256);
-                }
+            String actual = copyAndHash(assets, asset, tmp, expectedSha256 != null);
+            if (expectedSha256 != null && !expectedSha256.equals(actual)) {
+                throw new IOException("bootstrap sha256 mismatch: got " + actual
+                        + " want " + expectedSha256);
             }
         } catch (Exception e) {
             IoUtil.deleteQuietly(tmp);
@@ -99,6 +97,36 @@ public final class BootstrapExtractor {
             }
         }
         return count;
+    }
+
+    private static String copyAndHash(AssetManager assets, String assetPath, File dest, boolean computeHash)
+            throws Exception {
+        File parent = dest.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("cannot create " + parent);
+        }
+        MessageDigest digest = computeHash ? MessageDigest.getInstance("SHA-256") : null;
+        byte[] buffer = new byte[64 * 1024];
+        try (InputStream in = assets.open(assetPath);
+             OutputStream out = new FileOutputStream(dest)) {
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                out.write(buffer, 0, read);
+                if (digest != null) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+        }
+        if (digest == null) {
+            return null;
+        }
+        byte[] hash = digest.digest();
+        StringBuilder sb = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     private static boolean isGzip(File file) {

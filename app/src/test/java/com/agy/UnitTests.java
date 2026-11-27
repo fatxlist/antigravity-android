@@ -1,5 +1,6 @@
 package com.agy;
 
+import com.agy.core.CoreEnvironment;
 import com.agy.core.CoreEventWatcher;
 import com.agy.core.CoreServerService;
 import com.agy.core.VoiceForegroundService;
@@ -7,14 +8,17 @@ import com.agy.gateway.SystemGatewayServer;
 import com.agy.gateway.handlers.DoctorHandler;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
+import com.agy.runtime.RuntimeManager;
 import com.agy.theme.EdgeToEdge;
 import com.agy.theme.ThemeColors;
 import com.agy.ui.MainActivity;
 import com.agy.ui.download.FileDownloader;
 import com.agy.ui.extra.VoiceDictationController;
+import com.agy.ui.webview.AppHtmlInjector;
 import com.agy.util.AppFileProvider;
 import com.agy.util.DocumentsContractHelper;
 import com.agy.util.HostActivityResolver;
+import com.agy.util.SensitiveDataRedactor;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -376,6 +380,72 @@ public final class UnitTests {
         f.delete();
     }
 
+    private static void testSensitiveDataRedactor() {
+        checkEquals("redactLine null", null, SensitiveDataRedactor.redactLine(null));
+        checkEquals("redactLine empty", "", SensitiveDataRedactor.redactLine(""));
+        String clean = "2026-11-27 INFO core ready on port 45157";
+        check("redactLine fast-path returns exact identity on clean log",
+                SensitiveDataRedactor.redactLine(clean) == clean);
+        checkEquals("redactLine secret field",
+                "csrf_token=<redacted>&ok=1",
+                SensitiveDataRedactor.redactLine("csrf_token=secret123&ok=1"));
+        checkEquals("redactLine sensitive header",
+                "Authorization: <redacted>",
+                SensitiveDataRedactor.redactLine("Authorization: Bearer abc.def+123="));
+        checkEquals("redactLine bearer token",
+                "Header Bearer <redacted>",
+                SensitiveDataRedactor.redactLine("Header Bearer tok_999+abc="));
+    }
+
+    private static void testAppHtmlInjectorAssetVersioning() {
+        String html = "<head>"
+                + "<link rel=\"stylesheet\" href=\"./compiled_tailwind.css\">"
+                + "<script src=\"./generated/main.js\"></script>"
+                + "<script src=\"./cached.js?v=1\"></script>"
+                + "<script src=\"https://example.com/ext.js\"></script>"
+                + "</head>";
+        checkEquals("appendAssetVersion null unchanged", html, AppHtmlInjector.appendAssetVersion(html, null));
+        checkEquals("appendAssetVersion empty unchanged", html, AppHtmlInjector.appendAssetVersion(html, ""));
+        String versioned = AppHtmlInjector.appendAssetVersion(html, "20502_2.35.2_99");
+        String expected = "<head>"
+                + "<link rel=\"stylesheet\" href=\"./compiled_tailwind.css?v=20502_2.35.2_99\">"
+                + "<script src=\"./generated/main.js?v=20502_2.35.2_99\"></script>"
+                + "<script src=\"./cached.js?v=1\"></script>"
+                + "<script src=\"https://example.com/ext.js\"></script>"
+                + "</head>";
+        checkEquals("appendAssetVersion local js/css only", expected, versioned);
+    }
+
+    private static void testCoreEnvironmentMobileGoTuning() {
+        check("mem limit default 0", CoreEnvironment.computeGoMemLimitMiB(0L) == 512L);
+        check("mem limit default negative", CoreEnvironment.computeGoMemLimitMiB(-1024L) == 512L);
+        check("mem limit floor 1GiB", CoreEnvironment.computeGoMemLimitMiB(1024L * 1024L * 1024L) == 384L);
+        check("mem limit quarter 3GiB", CoreEnvironment.computeGoMemLimitMiB(3L * 1024L * 1024L * 1024L) == 768L);
+        check("mem limit cap 8GiB", CoreEnvironment.computeGoMemLimitMiB(8L * 1024L * 1024L * 1024L) == 1024L);
+
+        check("gomaxprocs default 0", CoreEnvironment.computeGoMaxProcs(0) == 4);
+        check("gomaxprocs floor 1", CoreEnvironment.computeGoMaxProcs(1) == 2);
+        check("gomaxprocs mid 4", CoreEnvironment.computeGoMaxProcs(4) == 4);
+        check("gomaxprocs cap 8", CoreEnvironment.computeGoMaxProcs(8) == 6);
+    }
+
+    private static void testRuntimeManagerCpuFeatures() {
+        check("cpuinfo null", !RuntimeManager.cpuSupportsAllEmulatedFeatures(null));
+        check("cpuinfo empty", !RuntimeManager.cpuSupportsAllEmulatedFeatures(""));
+        String fullCpuInfo = "processor\t: 0\nBogoMIPS\t: 38.40\n"
+                + "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp "
+                + "cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve "
+                + "asimdfhm dit uscat ilrcpc flagm ssbs\n";
+        check("cpuinfo all 6 emulated features supported",
+                RuntimeManager.cpuSupportsAllEmulatedFeatures(fullCpuInfo));
+        String missingIlrcpc = "Features\t: fp asimd atomics asimddp asimdrdm fcma lrcpc\n";
+        check("cpuinfo missing ilrcpc rejected",
+                !RuntimeManager.cpuSupportsAllEmulatedFeatures(missingIlrcpc));
+        String wrongKey = "ProcessorFeatures\t: atomics asimddp asimdrdm fcma lrcpc ilrcpc\n";
+        check("cpuinfo non-Features key ignored",
+                !RuntimeManager.cpuSupportsAllEmulatedFeatures(wrongKey));
+    }
+
     public static void main(String[] args) throws Exception {
         testGatewayAuth();
         testOAuthTokenStore();
@@ -390,6 +460,10 @@ public final class UnitTests {
         testHostActivityResolverCascadeId();
         testVoiceBluetoothDeviceSelection();
         testDoctorDaemonPidCheck();
+        testSensitiveDataRedactor();
+        testAppHtmlInjectorAssetVersioning();
+        testCoreEnvironmentMobileGoTuning();
+        testRuntimeManagerCpuFeatures();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");
     }
 }

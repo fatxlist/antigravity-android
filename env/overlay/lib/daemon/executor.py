@@ -7,6 +7,7 @@ notification dispatch, logging, and workspace UI waking.
 import os
 import sys
 import ssl
+import copy
 import time
 import json
 import shlex
@@ -176,12 +177,28 @@ def notify(title, message, tag=None, channel=None, cascade_id=None):
         return False
 
 
+_TASKS_CACHE_LOCK = threading.Lock()
+_TASKS_CACHE = {"key": None, "tasks": []}
+
+
 def load_tasks():
-    if not os.path.isfile(TASKS_FILE):
+    try:
+        st = os.stat(TASKS_FILE)
+    except OSError:
         return []
+    key = (TASKS_FILE, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
+    with _TASKS_CACHE_LOCK:
+        if _TASKS_CACHE["key"] == key:
+            return copy.deepcopy(_TASKS_CACHE["tasks"])
     try:
         with open(TASKS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            tasks = json.load(f)
+        if not isinstance(tasks, list):
+            tasks = []
+        with _TASKS_CACHE_LOCK:
+            _TASKS_CACHE["key"] = key
+            _TASKS_CACHE["tasks"] = copy.deepcopy(tasks)
+        return tasks
     except Exception as e:
         log(f"Error loading tasks: {e}")
         return []
@@ -193,6 +210,9 @@ def save_tasks(tasks):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(tasks, f, indent=2, ensure_ascii=False)
     os.replace(tmp_path, TASKS_FILE)
+    with _TASKS_CACHE_LOCK:
+        _TASKS_CACHE["key"] = None
+        _TASKS_CACHE["tasks"] = []
 
 
 def wake_antigravity_app():

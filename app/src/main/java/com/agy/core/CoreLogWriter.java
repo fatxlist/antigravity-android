@@ -4,16 +4,20 @@ import android.util.Log;
 
 import com.agy.util.SensitiveDataRedactor;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 /** Appends core stdout to files/logs/core.log. */
 public final class CoreLogWriter {
 
     private static final String TAG = "CoreLogWriter";
+    private static final int BUFFER_BYTES = 16 * 1024;
+    private static final long FLUSH_INTERVAL_MS = 500L;
+    private static volatile long lastFlushMs = 0L;
 
     private CoreLogWriter() {
     }
@@ -32,8 +36,10 @@ public final class CoreLogWriter {
                 //noinspection ResultOfMethodCallIgnored
                 currentLog.renameTo(prevLog);
             }
-            return new OutputStreamWriter(new FileOutputStream(currentLog, false),
-                    Charset.forName("UTF-8"));
+            lastFlushMs = System.currentTimeMillis();
+            return new BufferedWriter(
+                    new OutputStreamWriter(new FileOutputStream(currentLog, false), StandardCharsets.UTF_8),
+                    BUFFER_BYTES);
         } catch (Exception e) {
             Log.w(TAG, "cannot open core log", e);
             return null;
@@ -44,10 +50,22 @@ public final class CoreLogWriter {
         if (log == null || line == null) {
             return;
         }
+        writeRedactedLine(log, SensitiveDataRedactor.redactLine(line), true);
+    }
+
+    /** Writes an already-redacted line to the buffered core log, flushing on demand or every 500 ms. */
+    public static void writeRedactedLine(Writer log, String safeLine, boolean flushNow) {
+        if (log == null || safeLine == null) {
+            return;
+        }
         try {
-            log.write(SensitiveDataRedactor.redactLine(line));
+            log.write(safeLine);
             log.write('\n');
-            log.flush();
+            long now = System.currentTimeMillis();
+            if (flushNow || (now - lastFlushMs) >= FLUSH_INTERVAL_MS) {
+                log.flush();
+                lastFlushMs = now;
+            }
         } catch (Exception ignored) {
         }
     }
