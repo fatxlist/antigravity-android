@@ -52,12 +52,22 @@ try {
 try {
   if (typeof global.Notification === 'undefined') {
     var FakeNotification = function (title, options) {
+      var opts = options && typeof options === 'object' ? options : {};
       this.title = String(title || 'Antigravity');
-      this.body = (options && options.body) ? String(options.body) : '';
-      this.tag = (options && options.tag) ? String(options.tag) : ('agy_' + Date.now());
-      this.silent = !!(options && options.silent);
+      this.body = opts.body ? String(opts.body) : '';
+      this.tag = opts.tag ? String(opts.tag) : ('agy_' + Date.now());
+      this.silent = !!opts.silent;
+      this.icon = opts.icon ? String(opts.icon) : '';
+      this.data = opts.data !== undefined ? opts.data : null;
       this.onclick = null;
       this.onclose = null;
+      try {
+        var android = global.Android;
+        var tok = global.__AG_NATIVE_BRIDGE_TOKEN__;
+        if (android && typeof android.showAgentNotification === 'function' && tok) {
+          android.showAgentNotification(String(tok), this.title, this.body, this.tag, !!this.silent);
+        }
+      } catch (_) {}
     };
     FakeNotification.permission = 'granted';
     FakeNotification.requestPermission = function (cb) {

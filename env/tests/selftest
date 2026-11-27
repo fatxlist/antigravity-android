@@ -92,6 +92,18 @@ if [ -f "$DEB" ]; then
     [ "$(deb_field "$DEB" Version)" = "2.12.3-1" ] && ok "deb control Version" || bad "deb control Version"
     [ "$(deb_field "$DEB" Depends)" = "libiconv" ] && ok "deb control Depends" || bad "deb control Depends"
     deb_files "$DEB" | grep -qx 'bin/hello' && ok "deb data files" || bad "deb data files"
+
+    DEB_DEST="$(mktemp -d)"
+    DEB_LIST="$DEB_DEST/files.list"
+    mkdir -p "$DEB_DEST/out"
+    if deb_install_data "$DEB" "$DEB_DEST/out" 6 "$DEB_LIST" \
+            && [ -x "$DEB_DEST/out/bin/hello" ] \
+            && [ "$(cat "$DEB_LIST")" = "$(deb_files "$DEB")" ]; then
+        ok "deb_install_data single-pass extract & list matches deb_files"
+    else
+        bad "deb_install_data single-pass extract & list matches deb_files"
+    fi
+    rm -rf "$DEB_DEST"
 else
     printf 'SKIP  deb checks (no fixtures/hello.deb)\n'
 fi
@@ -105,22 +117,25 @@ printf '%s\n' "$*" >> "$AGY_NOTIFY_CAPTURE"
 EOF
 chmod +x "$NOTIFY_TMP/bin/rish"
 export AGY_NOTIFY_CAPTURE="$NOTIFY_TMP/calls.log"
-if PREFIX="$NOTIFY_TMP" bash "$SELF/../overlay/bin/agy-notify" cancel task_123 \
+if HOME="$NOTIFY_TMP" PREFIX="$NOTIFY_TMP" AGY_GATEWAY_TOKEN="" AGY_GATEWAY_TOKEN_FILE="" \
+        bash "$SELF/../overlay/bin/agy-notify" cancel task_123 \
         && grep -Fq 'cmd notification cancel task_123' "$AGY_NOTIFY_CAPTURE"; then
     ok "agy-notify cancel forwards its positional tag"
 else
     bad "agy-notify cancel forwards its positional tag"
 fi
-if PREFIX="$NOTIFY_TMP" bash "$SELF/../overlay/bin/agy-notify" cancel >/dev/null 2>&1; then
+if HOME="$NOTIFY_TMP" PREFIX="$NOTIFY_TMP" AGY_GATEWAY_TOKEN="" AGY_GATEWAY_TOKEN_FILE="" \
+        bash "$SELF/../overlay/bin/agy-notify" cancel >/dev/null 2>&1; then
     bad "agy-notify rejects missing cancel tag"
 else
     ok "agy-notify rejects missing cancel tag"
 fi
-if PREFIX="$NOTIFY_TMP" bash "$SELF/../overlay/bin/agy-notify" post -t "Test" -m "Msg" --tag "post_123" \
+if HOME="$NOTIFY_TMP" PREFIX="$NOTIFY_TMP" AGY_GATEWAY_TOKEN="" AGY_GATEWAY_TOKEN_FILE="" \
+        bash "$SELF/../overlay/bin/agy-notify" post -t "Test" -m "Msg" --tag "post_123" --cascade-id "conv-abc-123" \
         && grep -Fq 'cmd notification post -S bigtext  -t Test post_123 Msg' "$AGY_NOTIFY_CAPTURE"; then
-    ok "agy-notify post falls back cleanly without hardcoded logo"
+    ok "agy-notify post accepts --cascade-id and falls back cleanly"
 else
-    bad "agy-notify post falls back cleanly without hardcoded logo"
+    bad "agy-notify post accepts --cascade-id and falls back cleanly"
 fi
 rm -rf "$NOTIFY_TMP"
 unset AGY_NOTIFY_CAPTURE

@@ -102,8 +102,11 @@ public class MainActivity extends Activity
     private boolean pageFinished = false;
     private boolean uiReady = false;
     private boolean activityResumed = false;
+    private boolean webViewPaused = false;
+    private boolean awaitingStorageSettingsReturn = false;
     private int loadedGeneration = -1;
     private long splashDeadline;
+    private String pendingCascadeId;
     private final List<String> pendingSharedPayloads = new ArrayList<>();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -320,6 +323,7 @@ public class MainActivity extends Activity
         VoiceForegroundService.setStateListener(voiceServiceStateListener);
 
         handleSharedIntent(getIntent());
+        handleNotificationIntent(getIntent());
 
         splashDeadline = System.currentTimeMillis() + SPLASH_TIMEOUT_MS;
         backInvokedHandle = PredictiveBackHelper.register(this, new Runnable() {
@@ -391,12 +395,14 @@ public class MainActivity extends Activity
         if (!pendingSharedPayloads.isEmpty()) {
             flushPendingSharedPayloads();
         }
+        flushPendingCascadeId();
     }
 
     /** Called on the main thread when startup_ready.js signals AndroidBridge.onUiReady(). */
     public void onWebUiReady() {
         uiReady = true;
         flushPendingSharedPayloads();
+        flushPendingCascadeId();
         if (lastInsets != null) {
             pushSafeAreaInsetsToJs(lastInsets, true);
         }
@@ -536,6 +542,48 @@ public class MainActivity extends Activity
         } else {
             new com.agy.oauth.CustomTabLauncher().openInBrowser(this, url);
         }
+    }
+
+    private void handleNotificationIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        String raw = intent.getStringExtra(com.agy.util.HostActivityResolver.EXTRA_CASCADE_ID);
+        if (raw == null || raw.isEmpty()) {
+            return;
+        }
+        intent.removeExtra(com.agy.util.HostActivityResolver.EXTRA_CASCADE_ID);
+        String cleanId = com.agy.util.HostActivityResolver.sanitizeCascadeId(raw);
+        if (cleanId == null) {
+            return;
+        }
+        pendingCascadeId = cleanId;
+        if (uiReady) {
+            flushPendingCascadeId();
+        }
+    }
+
+    private void flushPendingCascadeId() {
+        if (pendingCascadeId == null || pendingCascadeId.isEmpty()) {
+            return;
+        }
+        WebView wv = webViewHost != null ? webViewHost.getWebView() : null;
+        if (wv == null) {
+            return;
+        }
+        String target = pendingCascadeId;
+        pendingCascadeId = null;
+        deliverOpenConversationToJs(wv, target);
+    }
+
+    private void deliverOpenConversationToJs(WebView webView, String cascadeId) {
+        String quoted = JSONObject.quote(cascadeId)
+                .replace("\u2028", "\\u2028")
+                .replace("\u2029", "\\u2029");
+        String js = "(function(id){if(typeof window.__agOpenConversation==='function'){"
+                + "window.__agOpenConversation(id);"
+                + "}else{window.__AG_PENDING_CASCADE_ID__=id;}})(" + quoted + ");";
+        webView.evaluateJavascript(js, null);
     }
 
     private void handleSharedIntent(Intent intent) {
@@ -746,6 +794,7 @@ public class MainActivity extends Activity
         super.onNewIntent(intent);
         setIntent(intent);
         handleSharedIntent(intent);
+        handleNotificationIntent(intent);
     }
 
     @Override
@@ -760,9 +809,15 @@ public class MainActivity extends Activity
     @Override
     protected void onPause() {
         activityResumed = false;
+        if (awaitingStorageSettingsReturn) {
+            awaitingStorageSettingsReturn = false;
+        }
         handler.removeCallbacks(pollServer);
-        if (webViewHost != null) {
+        boolean keepWebViewAlive = VoiceForegroundService.isActive()
+                || (webViewHost != null && webViewHost.hasPendingAudioPermissionRequest());
+        if (webViewHost != null && !keepWebViewAlive) {
             AppLifecycle.pause(webViewHost.getWebView());
+            webViewPaused = true;
         }
         super.onPause();
     }
@@ -778,8 +833,9 @@ public class MainActivity extends Activity
         super.onResume();
         activityResumed = true;
         activeActivity = this;
-        if (webViewHost != null) {
+        if (webViewHost != null && webViewPaused) {
             AppLifecycle.resume(webViewHost.getWebView());
+            webViewPaused = false;
         }
         refreshTheme();
         requestNotificationPermissionIfNeeded();
@@ -791,8 +847,7 @@ public class MainActivity extends Activity
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                && !android.os.Environment.isExternalStorageManager()) {
+        if (awaitingStorageSettingsReturn) {
             return;
         }
         if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
@@ -885,13 +940,16 @@ public class MainActivity extends Activity
                     Intent intent = new Intent(
                             android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
                     intent.setData(Uri.parse("package:" + getPackageName()));
+                    awaitingStorageSettingsReturn = true;
                     startActivity(intent);
                 }
             } catch (Exception e) {
                 try {
+                    awaitingStorageSettingsReturn = true;
                     startActivity(new Intent(
                             android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
                 } catch (Exception ignored) {
+                    awaitingStorageSettingsReturn = false;
                 }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

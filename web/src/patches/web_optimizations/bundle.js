@@ -3,8 +3,7 @@
  * 1. Base UI fast-path (`window.BASE_UI_ANIMATIONS_DISABLED = true`).
  * 2. Passive `scroll` listeners + block desktop overlay-scrollbar listeners.
  * 3. Targeted focus guard preventing startup / sheet-dismiss soft-keyboard popups.
- * 4. Surgical lazy 48kHz AudioContext/AudioWorklet gate.
- * 5. Targeted CSS optimizations for chat viewport, bottom sheets, menus, and GPUs.
+ * 4. Targeted CSS optimizations for chat viewport, bottom sheets, menus, and GPUs.
  */
 'use strict';
 
@@ -289,65 +288,6 @@ function installFocusGuard(win, documentRef) {
   } catch (e) {}
 }
 
-function installLazyAudioGate(win) {
-  try {
-    var OrigAudioContext = win.AudioContext || win.webkitAudioContext;
-    if (!OrigAudioContext || OrigAudioContext.__agLazyGated) return;
-
-    var WrappedAudioContext = function (opts) {
-      var ctx = opts !== undefined ? new OrigAudioContext(opts) : new OrigAudioContext();
-      var isBootVoiceCtx = !!(opts && opts.sampleRate === 48000);
-      try {
-        if (isBootVoiceCtx && ctx.state === 'running' && typeof ctx.suspend === 'function') {
-          ctx.suspend().catch(function () {});
-        }
-        if (isBootVoiceCtx && ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
-          var origAddModule = ctx.audioWorklet.addModule.bind(ctx.audioWorklet);
-          var pendingUrl = null;
-          var pendingOpts = undefined;
-          var loadedPromise = null;
-
-          var ensureLoaded = function () {
-            if (!loadedPromise && pendingUrl) {
-              loadedPromise = origAddModule(pendingUrl, pendingOpts);
-            }
-            return loadedPromise || Promise.resolve();
-          };
-
-          ctx.audioWorklet.addModule = function (moduleUrl, workletOpts) {
-            pendingUrl = moduleUrl;
-            pendingOpts = workletOpts;
-            return Promise.resolve();
-          };
-
-          if (typeof ctx.resume === 'function') {
-            var origResume = ctx.resume.bind(ctx);
-            ctx.resume = function () {
-              return ensureLoaded().then(function () {
-                return origResume();
-              });
-            };
-          }
-          if (typeof ctx.createMediaStreamSource === 'function') {
-            var origCreateStream = ctx.createMediaStreamSource.bind(ctx);
-            ctx.createMediaStreamSource = function (stream) {
-              ensureLoaded();
-              return origCreateStream(stream);
-            };
-          }
-        }
-      } catch (_) {}
-      return ctx;
-    };
-    WrappedAudioContext.prototype = OrigAudioContext.prototype;
-    WrappedAudioContext.__agLazyGated = true;
-    win.AudioContext = WrappedAudioContext;
-    if (win.webkitAudioContext) {
-      win.webkitAudioContext = WrappedAudioContext;
-    }
-  } catch (e) {}
-}
-
 function installStyles(documentRef) {
   try {
     var existing = documentRef.querySelectorAll(
@@ -510,7 +450,6 @@ function installStyles(documentRef) {
 installEventOptimizations(global, doc);
 installResizeObserverGate(global);
 installFocusGuard(global, doc);
-installLazyAudioGate(global);
 installStyles(doc);
 
 global.__agWebOptimizations = {

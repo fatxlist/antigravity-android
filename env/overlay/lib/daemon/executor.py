@@ -10,6 +10,7 @@ import ssl
 import time
 import json
 import shlex
+import zlib
 import pathlib
 import threading
 import subprocess
@@ -75,11 +76,98 @@ def log(msg):
         pass
 
 
-def notify(title, message, tag=None):
+def _resolve_gateway_config():
+    token = (os.environ.get("AGY_GATEWAY_TOKEN") or "").strip()
+    if not token:
+        # Match get_core_state_path(): read gateway.token under HOME unless overridden for host HOME.
+        token_file = os.path.join(HOME, "logs", "gateway.token")
+        if not os.path.isfile(token_file) and HOME == os.environ.get("HOME"):
+            token_file = (os.environ.get("AGY_GATEWAY_TOKEN_FILE") or "").strip() or token_file
+        try:
+            with open(token_file, "r", encoding="utf-8") as f:
+                token = f.read().strip()
+        except OSError:
+            token = ""
+    if not token:
+        return None, None
+
+    port_file = os.path.join(HOME, "logs", "gateway.port")
+    try:
+        with open(port_file, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        if raw.isdigit():
+            return int(raw), token
+    except OSError:
+        pass
+
+    try:
+        with open(get_core_state_path(), "r", encoding="utf-8") as f:
+            state = json.load(f)
+        gp = state.get("gateway_port")
+        if isinstance(gp, int) and gp > 0:
+            return gp, token
+        if isinstance(gp, str) and gp.isdigit():
+            return int(gp), token
+    except Exception:
+        pass
+
+    env_port = (os.environ.get("AGY_GATEWAY_PORT") or "").strip()
+    if env_port.isdigit():
+        return int(env_port), token
+
+    app_id = AGY_APPLICATION_ID or application_id_from_prefix(PREFIX)
+    return (45161 if app_id.endswith(".dev") else 45160), token
+
+
+def _post_gateway_notification_direct(title, message, tag=None, channel=None, cascade_id=None):
+    port, token = _resolve_gateway_config()
+    if not port or not token:
+        return False
+
+    resolved_tag = str(tag or "agy_task")
+    stable_id = (zlib.crc32(resolved_tag.encode("utf-8")) & 0x7FFFFFFF) or 1
+    payload = {
+        "action": "post",
+        "tag": resolved_tag,
+        "id": stable_id,
+        "title": str(title),
+        "message": str(message),
+    }
+    if channel:
+        payload["channel"] = str(channel)
+    if cascade_id:
+        payload["cascade_id"] = str(cascade_id)
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/gateway",
+        data=json.dumps({"command": "notify", "payload": payload}).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Agy-Gateway-Token": token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            return bool(data.get("ok"))
+    except Exception:
+        return False
+
+
+def notify(title, message, tag=None, channel=None, cascade_id=None):
     log(f"Notification: {title} - {message}")
+    if _post_gateway_notification_direct(title, message, tag=tag, channel=channel, cascade_id=cascade_id):
+        return True
     cmd = [_notify_bin(), "post", "-t", str(title), "-m", str(message)]
     if tag:
         cmd.extend(["--tag", str(tag)])
+    if channel:
+        cmd.extend(["--channel", str(channel)])
+    if cascade_id:
+        cmd.extend(["--cascade-id", str(cascade_id)])
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
         return True

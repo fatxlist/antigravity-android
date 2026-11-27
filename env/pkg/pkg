@@ -66,9 +66,14 @@ install_one() {
     printf 'Selecting previously unselected package %s.\n' "$name"
     printf 'Preparing to unpack .../%s ...\n' "$(basename "$fn")"
     printf 'Unpacking %s (%s) ...\n' "$name" "$ver"
-    deb_extract_data "$cache" "$PREFIX" "${PKG_DEB_STRIP:-6}" || die "$name: extract failed"
-    local pkg_files
-    pkg_files="$(deb_files "$cache")"
+    local list_tmp pkg_files=""
+    list_tmp="$(mktemp "$PKG_ROOT/tmp/files.XXXXXX")"
+    if ! deb_install_data "$cache" "$PREFIX" "${PKG_DEB_STRIP:-6}" "$list_tmp"; then
+        rm -f "$list_tmp"
+        die "$name: extract failed"
+    fi
+    pkg_files="$(cat "$list_tmp")"
+    rm -f "$list_tmp"
     # Rewrite every Termux prefix only in the freshly extracted files (bin/helpers,
     # dpkg .list, python/npm console scripts) before recording the package.
     if [ -n "$pkg_files" ]; then

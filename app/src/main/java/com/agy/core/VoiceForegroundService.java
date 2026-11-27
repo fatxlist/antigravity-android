@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
@@ -24,6 +25,7 @@ import com.agy.util.HostActivityResolver;
 
 import org.json.JSONObject;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -52,6 +54,8 @@ public final class VoiceForegroundService extends Service {
 
     private static final String DEFAULT_STATUS_TEXT = "Voice session active";
     private static final long WAKE_LOCK_TIMEOUT_MS = 60L * 60L * 1000L;
+    public static final int DEVICE_TYPE_BLUETOOTH_SCO = 7;
+    public static final int DEVICE_TYPE_BLE_HEADSET = 26;
 
     public interface StateListener {
         void onStateChanged(boolean active, boolean muted);
@@ -60,9 +64,19 @@ public final class VoiceForegroundService extends Service {
     public static volatile boolean active = false;
     public static volatile boolean muted = false;
     private static volatile String currentStatusText = "";
+    private static volatile String activeAudioRoute = "default";
     private static volatile StateListener stateListener;
 
-    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static volatile Handler mainHandler;
+
+    private static Handler getMainHandler() {
+        Handler h = mainHandler;
+        if (h == null) {
+            h = new Handler(Looper.getMainLooper());
+            mainHandler = h;
+        }
+        return h;
+    }
 
     private NotificationManager notificationManager;
     private AudioManager audioManager;
@@ -70,6 +84,7 @@ public final class VoiceForegroundService extends Service {
     private PowerManager.WakeLock wakeLock;
 
     private boolean hasAudioFocus = false;
+    private volatile boolean bluetoothRouted = false;
     private boolean sessionStarted = false;
 
     /**
@@ -191,6 +206,7 @@ public final class VoiceForegroundService extends Service {
             resp.put("ok", true);
             resp.put("active", active);
             resp.put("muted", muted);
+            resp.put("audio_route", activeAudioRoute != null ? activeAudioRoute : "default");
             resp.put("status_text", currentStatusText != null ? currentStatusText : "");
         } catch (Exception ignored) {
         }
@@ -299,6 +315,7 @@ public final class VoiceForegroundService extends Service {
         startForegroundSafe(buildNotification(currentStatusText, muted));
         acquireWakeLock();
         configureGentleAudioFocus();
+        configureBluetoothRouting();
 
         if (newlyStarted) {
             recordVoiceEvent("voice.session.started", true, muted);
@@ -315,6 +332,7 @@ public final class VoiceForegroundService extends Service {
         muted = false;
         currentStatusText = "";
 
+        releaseBluetoothRouting();
         releaseGentleAudioFocus();
         releaseWakeLock();
 
@@ -345,6 +363,7 @@ public final class VoiceForegroundService extends Service {
         active = false;
         muted = false;
         currentStatusText = "";
+        releaseBluetoothRouting();
         releaseGentleAudioFocus();
         releaseWakeLock();
         try {
@@ -536,6 +555,103 @@ public final class VoiceForegroundService extends Service {
         }
     }
 
+    /** Returns preferred Bluetooth communication device type (BLE headset > SCO), or -1 for default route. */
+    public static int selectPreferredBluetoothDeviceType(int[] availableDeviceTypes) {
+        if (availableDeviceTypes == null || availableDeviceTypes.length == 0) {
+            return -1;
+        }
+        boolean hasSco = false;
+        for (int type : availableDeviceTypes) {
+            if (type == DEVICE_TYPE_BLE_HEADSET) {
+                return DEVICE_TYPE_BLE_HEADSET;
+            }
+            if (type == DEVICE_TYPE_BLUETOOTH_SCO) {
+                hasSco = true;
+            }
+        }
+        return hasSco ? DEVICE_TYPE_BLUETOOTH_SCO : -1;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void configureBluetoothRouting() {
+        if (audioManager == null || bluetoothRouted) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                List<AudioDeviceInfo> devices = audioManager.getAvailableCommunicationDevices();
+                if (devices == null || devices.isEmpty()) {
+                    return;
+                }
+                int[] types = new int[devices.size()];
+                for (int i = 0; i < devices.size(); i++) {
+                    types[i] = devices.get(i).getType();
+                }
+                int preferredType = selectPreferredBluetoothDeviceType(types);
+                if (preferredType < 0) {
+                    return;
+                }
+                AudioDeviceInfo current = audioManager.getCommunicationDevice();
+                if (current != null && current.getType() == preferredType) {
+                    bluetoothRouted = true;
+                    activeAudioRoute = (preferredType == DEVICE_TYPE_BLE_HEADSET) ? "ble_headset" : "bluetooth_sco";
+                    return;
+                }
+                for (AudioDeviceInfo dev : devices) {
+                    if (dev.getType() == preferredType) {
+                        if (audioManager.setCommunicationDevice(dev)) {
+                            bluetoothRouted = true;
+                            activeAudioRoute = (preferredType == DEVICE_TYPE_BLE_HEADSET)
+                                    ? "ble_headset" : "bluetooth_sco";
+                            Log.i(TAG, "routed voice communication device: " + activeAudioRoute);
+                        }
+                        return;
+                    }
+                }
+                return;
+            }
+            if (!audioManager.isBluetoothScoAvailableOffCall()) {
+                return;
+            }
+            AudioDeviceInfo[] outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+            if (outputs == null) {
+                return;
+            }
+            for (AudioDeviceInfo dev : outputs) {
+                if (dev.getType() == DEVICE_TYPE_BLUETOOTH_SCO) {
+                    audioManager.startBluetoothSco();
+                    bluetoothRouted = true;
+                    activeAudioRoute = "bluetooth_sco";
+                    Log.i(TAG, "started legacy Bluetooth SCO route");
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "configureBluetoothRouting failed: " + t.getMessage());
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void releaseBluetoothRouting() {
+        if (audioManager == null || !bluetoothRouted) {
+            activeAudioRoute = "default";
+            bluetoothRouted = false;
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice();
+            } else {
+                audioManager.stopBluetoothSco();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "releaseBluetoothRouting failed: " + t.getMessage());
+        } finally {
+            bluetoothRouted = false;
+            activeAudioRoute = "default";
+        }
+    }
+
     private void recordVoiceEvent(String eventName, boolean isActive, boolean isMuted) {
         try {
             JSONObject data = new JSONObject();
@@ -560,7 +676,7 @@ public final class VoiceForegroundService extends Service {
         }
         final StateListener listener = stateListener;
         if (listener != null) {
-            MAIN_HANDLER.post(new Runnable() {
+            getMainHandler().post(new Runnable() {
                 @Override
                 public void run() {
                     try {

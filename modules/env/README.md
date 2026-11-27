@@ -48,7 +48,7 @@
  |                                CLI UTILITIES                                      |
  |          [cli/agy_system.py]                           [cli/agy_logs.py]          |
  |    Управление Android-уведомлениями,             Инспектор логов ядра core.log,   |
- |    Wakelock, Intent URL, Clipboard               дампов сбоев и commands.jsonl    |
+ |    Wakelock, URL, Clipboard, Doctor              дампов сбоев и commands.jsonl    |
  +-----------------------------------------------------------------------------------+
 ```
 
@@ -76,7 +76,7 @@ modules/env/
 ├── cmd/
 │   └── runner.py                # Телеметрический движок выполнения команд
 ├── cli/
-│   ├── agy_system.py            # CLI-контроллер Android Gateway (notify, open, wakelock)
+│   ├── agy_system.py            # CLI-контроллер Android Gateway (notify, open, wakelock, info, status, doctor, clipboard)
 │   └── agy_logs.py              # CLI-инспектор логов, истории команд и сбоев
 └── tests/
     ├── run_all.sh               # Главный скрипт синтаксической и модульной проверки
@@ -211,21 +211,24 @@ def record_crash_snapshot(error_msg: str, dump_path: str, extra_context: Dict[st
 ### 7.1. IPC-клиент (`bridge/client.py`)
 - `resolve_gateway_url() -> str`:
   1. Проверяет переменную окружения `AGY_GATEWAY_URL`.
-  2. Ищет файл динамического порта `gateway.port` в `$HOME/logs/gateway.port`, `app_root/logs/gateway.port` и стандартных директориях `com.agy.dev` / `com.agy`.
-  3. При отсутствии файла выбирает порт по умолчанию: `45161` для `DEV_MODE=1` / `com.agy.dev`, либо `45160` для production.
+  2. Ищет файл динамического порта `gateway.port` в `$HOME/logs/gateway.port`, `app_root/logs/gateway.port`, стандартных директориях `com.agy.dev` / `com.agy` и профилях `/data/user/*/com.agy*/files/logs/gateway.port`.
+  3. При отсутствии файла выбирает порт по умолчанию: `45161` для `DEV_MODE=1` / `AGY_APPLICATION_ID=com.agy.dev` / `$HOME` с `com.agy.dev`, либо `45160` для production.
+- `resolve_gateway_token() -> Optional[str]`: читает токен аутентификации из `AGY_GATEWAY_TOKEN`, `AGY_GATEWAY_TOKEN_FILE` или файлов `gateway.token` и передает его в заголовке `X-Agy-Gateway-Token` (`TOKEN_HEADER`).
 - `send_command(command: str, payload: dict = None, gateway_url: str = None) -> dict`:
   - Отправляет HTTP POST запрос с JSON-конвертом `{command, payload}` на эндпоинт `/gateway`.
-  - Автоматический failover: при недоступности основного порта выполняет попытку переподключения на альтернативный порт (`45160` <-> `45161`).
-  - Возвращает `{ok: False, fallback: True, error: ...}` при невозможности связаться со шлюзом без генерации необработанных исключений.
+  - Автоматический failover: при недоступности основного порта (если `gateway_url` не задан явно) выполняет попытку переподключения на альтернативный порт (`45160` <-> `45161`).
+  - Возвращает `{ok: False, fallback: True, error: ..., packet: ...}` при невозможности связаться со шлюзом без генерации необработанных исключений.
+- Дополнительные методы клиента: `exec_start()`, `exec_status()`, `exec_cancel()`, `exec_list()`, `exec_command()` (синхронный и асинхронный режим с поллингом/таймаутом), `get_status()`, `doctor()`, `repair()`.
 
 ### 7.2. Типизированный фасад команд (`bridge/commands.py`)
-- `notify(title, message, progress=None, tag="agy_status", channel="agy_tasks", ongoing=False) -> dict`: Отправка Android-уведомления в статус-бар с поддержкой прогресс-бара (0-100) и закрепления.
+- `notify(title, message, progress=None, tag="agy_status", channel="agy_tasks", ongoing=False) -> dict`: Отправка Android-уведомления в статус-бар с поддержкой прогресс-бара (clamped `0..100`) и закрепления.
 - `cancel_notify(tag="agy_status", notification_id=1001) -> dict`: Отзыв активного уведомления.
 - `open_url(url: str) -> dict`: Открытие веб-ссылки или диплинка через Android Intent (`ACTION_VIEW`).
 - `wakelock(acquire=True, tag="agy_task") -> dict`: Удержание/освобождение процессорного `PARTIAL_WAKE_LOCK`.
 - `clipboard_set(text: str) -> dict`: Копирование текста в системный буфер обмена Android.
 - `clipboard_get() -> dict`: Чтение текста из системного буфера обмена Android.
 - `system_info() -> dict`: Запрос состояния батареи, сети, свободной памяти и диска.
+- `status() -> dict`, `doctor() -> dict`, `repair() -> dict`: Проверка состояния шлюза/ядра и выполнение безопасных исправлений.
 
 ---
 
@@ -272,6 +275,8 @@ python3 modules/env/cli/agy_system.py wakelock off --tag "long_job"
 # 4. Диагностика хоста Android:
 python3 modules/env/cli/agy_system.py info
 python3 modules/env/cli/agy_system.py --json info
+python3 modules/env/cli/agy_system.py status
+python3 modules/env/cli/agy_system.py doctor [--repair]
 
 # 5. Буфер обмена:
 echo "секретный токен" | python3 modules/env/cli/agy_system.py clipboard set
@@ -361,3 +366,31 @@ bash modules/env/tests/run_all.sh
 ### 11.8. Игнорирование флага `--json` и тихие ошибки в `cli/agy_system.py`
 - **Проблема**: Подкоманда `clipboard` игнорировала аргумент `--json` и ничего не сообщала пользователю при ошибках связи со шлюзом.
 - **Исправление**: Реализован вывод сырого JSON при флаге `--json` и вывод сообщений об ошибках в `stderr` с ненулевым кодом выхода.
+
+---
+
+## Subdirectories & Boundaries
+- **Bridge**: [./bridge/README.md](./bridge/README.md) — Authenticated HTTP IPC client (`client.py`) and typed Android System Gateway command wrappers (`commands.py`).
+- **CLI**: [./cli/README.md](./cli/README.md) — Runtime log/crash/command inspector (`agy_logs.py`) and Android System Gateway CLI controller (`agy_system.py`).
+- **Command Runner**: [./cmd/README.md](./cmd/README.md) — Shell command execution engine and CLI wrapper (`runner.py`) with JSONL audit logging.
+- **Context**: [./context/README.md](./context/README.md) — Dynamic Android package ID & path resolver (`path_resolver.py`) and isolated process environment builder (`env_builder.py`) backed by `spec/paths.json` and `spec/env_vars.json`.
+- **Diagnostics**: [./diagnostics/README.md](./diagnostics/README.md) — ARM64/storage/writability pre-flight checker (`preflight.py`) and loopback TCP port availability validator (`port_checker.py`).
+- **Logging**: [./logging/README.md](./logging/README.md) — Structured ANSI/JSONL console logger (`log.py`) and post-mortem JSON crash snapshot recorder (`flight_recorder.py`).
+
+## Invariants
+- `[context/path_resolver.py:get_application_id]`: Android package ID resolution follows strict precedence `AGY_APPLICATION_ID` -> `APPLICATION_ID` -> `"com.agy.dev"` (when `DEV_MODE == "1"`) -> `"com.agy"`; `[context/path_resolver.py:resolve_subpath]` strips leading `/` so relative subpaths cannot discard the resolved root.
+- `[context/env_builder.py:build_process_env]`: Always constructs a clean process environment dictionary (`HOME`, `PREFIX`, `TMPDIR`, `GIT_CONFIG_NOSYSTEM="1"`, `AGY_APPLICATION_ID`, `PATH`, existing-only `LD_LIBRARY_PATH`, plus `extra_env` last) without mutating `os.environ`.
+- `[diagnostics/preflight.py:run_preflight]`: Preflight succeeds (`ok=True`) strictly when CPU architecture is `aarch64`/`arm64`, free space on `app_root` is `>= min_mb_free` (default `250` MB), and `app_root` is writable (`os.W_OK`); `[diagnostics/port_checker.py:check_port_available]` validates IPv4 TCP bind availability on `127.0.0.1` by default with a `0.5s` timeout.
+- `[bridge/client.py:resolve_gateway_url]`: Gateway discovery resolves `AGY_GATEWAY_URL`, then numeric `gateway.port` files, then port `45161` (dev) or `45160` (release); `[bridge/client.py:send_command]` attaches `[bridge/client.py:TOKEN_HEADER]` (`X-Agy-Gateway-Token`) when resolved, retries once on the alternate port (`45160` <-> `45161`) if `gateway_url is None`, and returns a fallback error dict instead of raising transport exceptions.
+- `[cmd/runner.py:run]`: Maps subprocess outcomes strictly to `SUCCESS` (`0`), `FAILED` (non-zero), `TIMEOUT` (`124`), or `ERROR` (`1`), and leaves parent `os.environ` unchanged; `[logging/log.py:log]` disables ANSI colors when `NO_COLOR` is set or `TERM == "dumb"` and routes `ERROR` strictly to `sys.stderr`.
+- `[cli/agy_logs.py:main]`: Mode precedence is `--status` > `--commands` > `--cmd-id` > `--crash` > default log tail, falling back to local files (`core.log`, `commands.jsonl`, `logs/crashes`) when gateway endpoints are unavailable; `[cli/agy_system.py:cmd_status]` and `[cli/agy_system.py:cmd_doctor]` exit `1` on falsy `res.get("ok")` even under `--json`.
+
+## Side Effects
+- `[bridge/client.py:DEFAULT_GATEWAY_URL]` & `[cli/agy_logs.py:GATEWAY_BASE]`: Perform import-time environment reads, `gateway.port` file probes, and `/data/user/*/com.agy*/files/logs/` filesystem globs; `[cli/agy_logs.py:MODULES_ENV_DIR]`, `[cli/agy_system.py:MODULES_ENV_DIR]`, and `[cmd/runner.py:_resolve_log_dir]` may prepend module paths to `sys.path`.
+- `[bridge/client.py:send_command]` & `[cli/agy_system.py:main]`: Issue outbound loopback HTTP POST requests to Android System Gateway, triggering host Android notifications, URL intents, wakelocks, clipboard reads/writes, health checks, repairs, and async shell execution; `[cli/agy_logs.py:fetch_from_gateway]` issues outbound loopback HTTP GET requests.
+- `[cmd/runner.py:run]`: Executes arbitrary shell commands (`subprocess.run(..., shell=True)`) and appends UTF-8 JSONL audit records to `<LOG_DIR>/commands.jsonl`.
+- `[logging/log.py:log]` & `[logging/flight_recorder.py:record_crash_snapshot]`: Write log lines to `sys.stdout`/`sys.stderr`, create parent directories (`os.makedirs(..., exist_ok=True)`), append JSONL log files, and write JSON crash dumps to disk.
+- `[diagnostics/port_checker.py:check_port_available]`: Transiently allocates and binds an IPv4 TCP socket on `(host, port)`.
+
+## Verification
+- Run: `bash modules/env/tests/run_all.sh`

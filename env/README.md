@@ -19,7 +19,7 @@ env/
 ├── build.sh                # Главный скрипт сборки и упаковки ассетов в dist/env
 ├── bootstrap/              # Базовый архив rootfs и утилиты модификации
 │   ├── bootstrap-aarch64.zip # Исходный бинарный zip-архив Termux bootstrap
-│   ├── bootstrap.tar.gz      # Оптимизированный tar.gz (symlinks, pruned docs)
+│   ├── bootstrap.tar.gz      # Оптимизированный tar.gz (генерируется build.sh bootstrap)
 │   └── patch-prefix.py       # (Legacy) Скрипт бинарного патчинга ELF для dpkg
 ├── packages/               # Дополнительные пакеты, вшиваемые в bootstrap
 │   └── git.deb             # Предварительно подготовленный пакет Git для автономности
@@ -61,17 +61,20 @@ env/
 │   ├── liblse_compat.c     # Исходный код перехвата SIGILL и софтверной эмуляции
 │   ├── liblse_compat.so    # Скомпилированная разделяемая библиотека
 │   └── build.sh            # Скрипт сборки liblse_compat.so
-├── repo/                   # Локальный каталог кэша репозиториев (по умолчанию пуст)
 ├── scripts/                # Инженерные скрипты сопровождения
 │   ├── pack_bootstrap.py   # Конвертер zip -> tar.gz с очисткой doc/man и инъекцией extra-deb
-│   └── make_manifest.py    # Генератор детерминированного manifest.json для проверки целостности
-├── dist/                   # Результат сборки assets для включения в APK
+│   ├── sanitize_stage.py   # Удаление __pycache__/.pyc/.pyo и нормализация CRLF -> LF
+│   └── make_manifest.py    # Генератор/валидатор детерминированного manifest.json
+├── dist/                   # Генерируется build.sh assets (или $ASSETS) для включения в APK
 │   └── env/                # Зеркало assets/env (bootstrap, overlay, pkg, manifest.json)
 └── tests/                  # Комплексный набор тестов
     ├── fixtures/           # Тестовые фикстуры (hello.deb, Packages)
     ├── selftest            # Автономное тестирование pkg (vercmp, db, resolver, deb)
     ├── invariant           # Проверка целостности ассетов и симлинков 1:1
-    └── e3                  # E2E-тест развертывания rootfs во временный каталог и запуска
+    ├── e3                  # E2E-тест развертывания rootfs во временный каталог и запуска
+    ├── test_executor.py    # Unit-тесты daemon executor (ConnectRPC, задачи)
+    ├── test_mcp_android.py # Unit-тесты stdio MCP-сервера agy-mcp-android
+    └── test_mcp_browser.py # Unit-тесты stdio MCP-сервера agy-mcp-browser
 
 ```
 
@@ -209,9 +212,8 @@ env/
   Исправлено вычисление пути `HOME`:
   Ранее ошибочно использовалось `export HOME="${HOME:-/data/user/0/$(basename "$(dirname "$PREFIX")")/files}"`, приводившее к пути вида `/data/user/0/files/files`.
   Исправлено на стандартное и корректное: `export HOME="${HOME:-$(dirname "$PREFIX")}"`.
-- **Шебанги `com.agy`:**
-  В файлах `env/pkg/pkg`, `env/overlay/bin/agy-fix-paths`, `env/overlay/bin/agy-notify`, `env/overlay/bin/agy-upgrade` первой строкой указан шебанг:
-  `#!/data/data/com.agy/files/usr/bin/bash` или `#!/data/user/0/com.agy/files/usr/bin/bash`.
+- **Шебанги `com.agy` / `com.agy.dev`:**
+  В файлах `env/pkg/pkg`, `env/overlay/bin/agy-fix-paths`, `env/overlay/bin/agy-notify`, `env/overlay/bin/agy-upgrade` первой строкой указан шебанг вида `#!/data/data/com.agy/files/usr/bin/bash`, `#!/data/user/0/com.agy/files/usr/bin/bash` или `#!/data/user/0/com.agy.dev/files/usr/bin/bash`.
   `TermuxShebangRewriter` перезаписывает их при установке APK.
 
 ### 3. Оверхед генерации мостов в `pkg/pkg` [ИСПРАВЛЕНО - Заход 1]
@@ -252,24 +254,59 @@ env/
 
 ### Сборка окружения
 ```bash
-# 1. Сборка оптимизированного bootstrap.tar.gz из bootstrap-aarch64.zip
-./env/build.sh bootstrap
+# 1. Принудительная сборка bootstrap.tar.gz из bootstrap-aarch64.zip и packages/*.deb
+bash env/build.sh bootstrap
 
-# 2. Упаковка всех слоев окружения в dist/env (готово к включению в APK)
-./env/build.sh assets
+# 2. Упаковка всех слоев окружения в dist/env (собирает bootstrap.tar.gz только если он отсутствует)
+bash env/build.sh assets
 
-# 3. Полная пересборка всех компонентов
-./env/build.sh all
+# 3. Псевдоним для assets (по умолчанию, без принудительной пересборки существующего bootstrap.tar.gz)
+bash env/build.sh all
 ```
 
 ### Запуск тестов
 ```bash
-# 1. Автономный модульный тест ядра pkg (vercmp, resolver, db, deb)
+# 1. Python unit-тесты (executor, agy-mcp-android, agy-mcp-browser)
+python3 -B -m unittest discover -s env/tests -v
+
+# 2. Автономный модульный тест ядра pkg (vercmp, resolver, db, deb)
 bash env/tests/selftest
 
-# 2. Проверка инвариантов и целостности дерева ассетов
-bash env/tests/invariant
+# 3. Проверка инвариантов и целостности дерева ассетов (после сборки assets)
+bash env/build.sh assets && bash env/tests/invariant
 
-# 3. Полный интеграционный E2E-тест развертывания префикса
+# 4. Полный интеграционный E2E-тест развертывания префикса
 bash env/tests/e3
 ```
+
+---
+
+## Interface
+- `[build.sh:case]` Host build CLI (`#!/usr/bin/env bash`, `set -eo pipefail`) accepting `${1:-all}`: `bootstrap` (`[build.sh:build_bootstrap_tar]`), `assets` (`[build.sh:pack_assets]`), or `all` (alias to `[build.sh:pack_assets]`).
+- `[build.sh:ENV_DIR]` Dynamically resolved root directory of `env/`.
+- `[build.sh:ASSETS]` Overridable output staging root environment variable (default `$ENV_DIR/dist`, writing bundle contents under `$ASSETS/env`).
+- `[build.sh:PYTHON]` Resolved Python interpreter (`python3`, falling back to `python`) invoked with `-B`.
+- `[build.sh:build_bootstrap_tar]` Packs `$ENV_DIR/bootstrap/bootstrap-aarch64.zip` plus all `$ENV_DIR/packages/*.deb` (`--extra-deb`) into `$ENV_DIR/bootstrap/bootstrap.tar.gz` via `scripts/pack_bootstrap.py`.
+- `[build.sh:pack_assets]` Stages `pkg/`, `overlay/`, `bootstrap/bootstrap.tar.gz`, and optional `seed-packages.txt` into `$ASSETS/env`, sanitizes via `scripts/sanitize_stage.py`, and generates `$ASSETS/env/manifest.json` via `scripts/make_manifest.py`.
+- `[build.sh:log]` Helper printing `build: <message>` diagnostics to stderr.
+- Child contracts:
+  - `bootstrap`: [./bootstrap/README.md](./bootstrap/README.md) — Base Termux `bootstrap-aarch64.zip` archive and optional legacy `patch-prefix.py` prefix rewriter.
+  - `liblse_compat`: [./liblse_compat/README.md](./liblse_compat/README.md) — Standalone AArch64 `SIGILL` trap-and-emulate shared library (`liblse_compat.so`) for ARMv8.1–8.4 instructions on ARMv8.0-A CPUs.
+  - `overlay`: [./overlay/README.md](./overlay/README.md) — Files overlaid onto `$PREFIX` (`bin/` CLIs & stdio MCP servers, `etc/` profiles/TLS/skills, `lib/` `libtermux-exec.so` & daemon package).
+  - `pkg`: [./pkg/README.md](./pkg/README.md) — Pure Bash/AWK package manager CLI (`pkg`) and runtime library (`lib/`).
+  - `scripts`: [./scripts/README.md](./scripts/README.md) — Host-side Python bundle tooling (`pack_bootstrap.py`, `sanitize_stage.py`, `make_manifest.py`).
+
+## Invariants
+- `[build.sh:set -eo pipefail]` Aborts immediately on command or pipeline failure.
+- `[build.sh:PYTHON]` Requires `python3` or `python` on `PATH` (exits `1` otherwise) and passes `-B` to prevent writing `.pyc` files during builds.
+- `[build.sh:build_bootstrap_tar]` Requires `$ENV_DIR/bootstrap/bootstrap-aarch64.zip` (`return 1` if missing) and injects every regular `$ENV_DIR/packages/*.deb` via `--extra-deb`.
+- `[build.sh:pack_assets]` Builds `$ENV_DIR/bootstrap/bootstrap.tar.gz` only when absent (`all` aliases `assets` and does not force-rebuild an existing tarball); copies `pkg/` and `overlay/` with `cp -a`, sanitizes staged `pkg`, `overlay`, and optional `seed-packages.txt` before `make_manifest.py`, and omits `liblse_compat/liblse_compat.so` from `$ASSETS/env`.
+- `[build.sh:case]` Rejects any subcommand outside `bootstrap|assets|all` with exit code `1`.
+
+## Side Effects
+- `[build.sh:build_bootstrap_tar]` Invokes `scripts/pack_bootstrap.py`, writing/replacing `$ENV_DIR/bootstrap/bootstrap.tar.gz` and logging archive size to stderr.
+- `[build.sh:pack_assets]` Deletes `$ASSETS` via `rm -rf "$ASSETS"`, recreates `$ASSETS/env/bootstrap`, copies `pkg/`, `overlay/`, `bootstrap/bootstrap.tar.gz`, and optional `seed-packages.txt` into `$ASSETS/env`, strips Python bytecode and normalizes CRLF to LF in place via `scripts/sanitize_stage.py`, writes `$ASSETS/env/manifest.json` via `scripts/make_manifest.py`, and lists staged paths (`find "$ASSETS" -maxdepth 3`) to stderr.
+
+## Verification
+- Run: `python3 -B -m unittest discover -s env/tests -v`
+- Run: `bash env/build.sh assets && bash env/tests/invariant`

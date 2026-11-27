@@ -1,7 +1,10 @@
 package com.agy;
 
 import com.agy.core.CoreEventWatcher;
+import com.agy.core.CoreServerService;
+import com.agy.core.VoiceForegroundService;
 import com.agy.gateway.SystemGatewayServer;
+import com.agy.gateway.handlers.DoctorHandler;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
 import com.agy.theme.EdgeToEdge;
@@ -11,7 +14,10 @@ import com.agy.ui.download.FileDownloader;
 import com.agy.ui.extra.VoiceDictationController;
 import com.agy.util.AppFileProvider;
 import com.agy.util.DocumentsContractHelper;
+import com.agy.util.HostActivityResolver;
 
+import java.io.File;
+import java.nio.file.Files;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -244,7 +250,133 @@ public final class UnitTests {
         check("#f3f4f6 is light", !ThemeColors.isDarkColor(0xFFF3F4F6));
     }
 
-    public static void main(String[] args) {
+    private static File createTempTestDir(String prefix) throws Exception {
+        String envTmp = System.getenv("TMPDIR");
+        File baseTmp = (envTmp != null && !envTmp.isEmpty() && new File(envTmp).isDirectory())
+                ? new File(envTmp)
+                : new File(System.getProperty("java.io.tmpdir"));
+        return Files.createTempDirectory(baseTmp.toPath(), prefix).toFile();
+    }
+
+    private static void testCoreServerDaemonEnv() throws Exception {
+        File tmpFiles = createTempTestDir("agy_daemon_env_test_");
+        try {
+            File usrBin = new File(tmpFiles, "usr/bin");
+            File usrLib = new File(tmpFiles, "usr/lib");
+            File tlsDir = new File(tmpFiles, "usr/etc/tls");
+            usrBin.mkdirs();
+            usrLib.mkdirs();
+            tlsDir.mkdirs();
+
+            File preload = new File(usrLib, "libtermux-exec.so");
+            preload.createNewFile();
+            File cert = new File(tlsDir, "cert.pem");
+            cert.createNewFile();
+            File py = new File(usrBin, "python3");
+            py.createNewFile();
+            py.setExecutable(true, false);
+
+            ProcessBuilder pb = new ProcessBuilder(CoreServerService.buildDaemonCommand(tmpFiles, "start"));
+            CoreServerService.configureDaemonProcess(pb, tmpFiles, "com.agy.dev", 45161);
+            Map<String, String> env = pb.environment();
+
+            checkEquals("daemon command uses python3 when executable", py.getAbsolutePath(), pb.command().get(0));
+            checkEquals("daemon command targets agy-daemon", new File(usrBin, "agy-daemon").getAbsolutePath(), pb.command().get(1));
+            checkEquals("daemon action preserved", "start", pb.command().get(2));
+            checkEquals("daemon HOME set", tmpFiles.getAbsolutePath(), env.get("HOME"));
+            checkEquals("daemon PREFIX set", new File(tmpFiles, "usr").getAbsolutePath(), env.get("PREFIX"));
+            checkEquals("daemon TMPDIR set", new File(tmpFiles, "usr/tmp").getAbsolutePath(), env.get("TMPDIR"));
+            check("daemon TMPDIR created", new File(tmpFiles, "usr/tmp").isDirectory());
+            check("daemon PATH prefixed with usr/bin", env.get("PATH").startsWith(usrBin.getAbsolutePath()));
+            check("daemon LD_LIBRARY_PATH includes usr/lib", env.get("LD_LIBRARY_PATH").contains(usrLib.getAbsolutePath()));
+            checkEquals("daemon LD_PRELOAD set", preload.getAbsolutePath(), env.get("LD_PRELOAD"));
+            checkEquals("daemon SSL_CERT_FILE set", cert.getAbsolutePath(), env.get("SSL_CERT_FILE"));
+            checkEquals("daemon AGY_APPLICATION_ID set", "com.agy.dev", env.get("AGY_APPLICATION_ID"));
+            checkEquals("daemon AGY_GATEWAY_PORT set", "45161", env.get("AGY_GATEWAY_PORT"));
+        } finally {
+            deleteRecursively(tmpFiles);
+        }
+    }
+
+    private static void testHostActivityResolverCascadeId() {
+        checkEquals("sanitizeCascadeId accepts valid id",
+                "conv-123_abc.def", HostActivityResolver.sanitizeCascadeId("conv-123_abc.def"));
+        checkEquals("sanitizeCascadeId trims whitespace",
+                "conv-9", HostActivityResolver.sanitizeCascadeId("  conv-9  "));
+        check("sanitizeCascadeId rejects traversal", HostActivityResolver.sanitizeCascadeId("../bad") == null);
+        check("sanitizeCascadeId rejects slash", HostActivityResolver.sanitizeCascadeId("a/b") == null);
+        check("sanitizeCascadeId rejects empty", HostActivityResolver.sanitizeCascadeId("") == null);
+        check("sanitizeCascadeId rejects null", HostActivityResolver.sanitizeCascadeId(null) == null);
+        StringBuilder over = new StringBuilder();
+        for (int i = 0; i < 129; i++) {
+            over.append('a');
+        }
+        check("sanitizeCascadeId rejects >128 chars", HostActivityResolver.sanitizeCascadeId(over.toString()) == null);
+    }
+
+    private static void testVoiceBluetoothDeviceSelection() {
+        check("bluetooth selector returns -1 for null",
+                VoiceForegroundService.selectPreferredBluetoothDeviceType(null) == -1);
+        check("bluetooth selector returns -1 for empty",
+                VoiceForegroundService.selectPreferredBluetoothDeviceType(new int[0]) == -1);
+        check("bluetooth selector ignores non-BT devices",
+                VoiceForegroundService.selectPreferredBluetoothDeviceType(new int[]{1, 2}) == -1);
+        check("bluetooth selector chooses SCO when available",
+                VoiceForegroundService.selectPreferredBluetoothDeviceType(
+                        new int[]{2, VoiceForegroundService.DEVICE_TYPE_BLUETOOTH_SCO})
+                        == VoiceForegroundService.DEVICE_TYPE_BLUETOOTH_SCO);
+        check("bluetooth selector prefers BLE headset over SCO",
+                VoiceForegroundService.selectPreferredBluetoothDeviceType(
+                        new int[]{VoiceForegroundService.DEVICE_TYPE_BLUETOOTH_SCO, VoiceForegroundService.DEVICE_TYPE_BLE_HEADSET})
+                        == VoiceForegroundService.DEVICE_TYPE_BLE_HEADSET);
+    }
+
+    private static void testDoctorDaemonPidCheck() throws Exception {
+        File tmp = createTempTestDir("agy_doc_pid_test_");
+        try {
+            File pidFile = new File(tmp, "daemon.pid");
+            File procRoot = new File(tmp, "proc");
+            check("missing pidFile yields -1", DoctorHandler.readLiveDaemonPid(pidFile, procRoot) == -1L);
+
+            File proc4321 = new File(procRoot, "4321");
+            proc4321.mkdirs();
+            Files.write(pidFile.toPath(), "4321\n".getBytes("UTF-8"));
+            Files.write(new File(proc4321, "cmdline").toPath(),
+                    "python3\0/usr/bin/agy-daemon\0start\0".getBytes("UTF-8"));
+            check("live agy-daemon pid detected", DoctorHandler.readLiveDaemonPid(pidFile, procRoot) == 4321L);
+
+            File proc4322 = new File(procRoot, "4322");
+            proc4322.mkdirs();
+            Files.write(pidFile.toPath(), "{\"pid\":4322}".getBytes("UTF-8"));
+            Files.write(new File(proc4322, "cmdline").toPath(),
+                    "python3\0/usr/bin/agy-daemon\0".getBytes("UTF-8"));
+            check("live JSON agy-daemon pid detected", DoctorHandler.readLiveDaemonPid(pidFile, procRoot) == 4322L);
+
+            File proc4323 = new File(procRoot, "4323");
+            proc4323.mkdirs();
+            Files.write(pidFile.toPath(), "4323\n".getBytes("UTF-8"));
+            Files.write(new File(proc4323, "cmdline").toPath(),
+                    "sleep\00060\0".getBytes("UTF-8"));
+            check("non-daemon process cmdline rejected", DoctorHandler.readLiveDaemonPid(pidFile, procRoot) == -1L);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f == null || !f.exists()) {
+            return;
+        }
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                deleteRecursively(c);
+            }
+        }
+        f.delete();
+    }
+
+    public static void main(String[] args) throws Exception {
         testGatewayAuth();
         testOAuthTokenStore();
         testAppFileProviderDenyList();
@@ -254,6 +386,10 @@ public final class UnitTests {
         testCoreEventWatcherFatalFilter();
         testRequestCodeUniqueness();
         testThemeColors();
+        testCoreServerDaemonEnv();
+        testHostActivityResolverCascadeId();
+        testVoiceBluetoothDeviceSelection();
+        testDoctorDaemonPidCheck();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");
     }
 }

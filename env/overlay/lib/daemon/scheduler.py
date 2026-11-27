@@ -34,9 +34,9 @@ RESOLV_CONF_PATH = os.path.join(HOME, "etc", "resolv.conf")
 BRAIN_GLOB = os.path.join(HOME, ".gemini", "antigravity-app", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
 
 
-def _post_gateway_notification(title, message, tag="agy_turn_done"):
+def _post_gateway_notification(title, message, tag="agy_turn_done", channel="agy_alerts", cascade_id=None):
     """Post a clickable native Android notification via agy-notify / gateway."""
-    notify(title, message, tag=tag)
+    notify(title, message, tag=tag, channel=channel, cascade_id=cascade_id)
 
 
 def _guard_resolv_conf(state):
@@ -90,22 +90,84 @@ def _read_last_jsonl_record(path):
     return None
 
 
-def _check_conversation_turns(state):
-    """Watch active transcript.jsonl files and notify when an agent turn completes."""
-    mtimes = state.setdefault("transcript_mtimes", {})
+def _extract_conv_id(path):
+    """Extract sanitized conversation/cascade ID from .../brain/<conv_id>/.../transcript.jsonl."""
+    parts = os.path.normpath(path).split(os.sep)
+    conv_id = ""
+    for i, part in enumerate(parts):
+        if part == "brain" and i + 1 < len(parts):
+            conv_id = parts[i + 1]
+            break
+    clean = re.sub(r"[^A-Za-z0-9_.-]", "", conv_id).strip(".")
+    return clean[:128] if clean else ""
+
+
+def _turn_tag_for_path(path):
+    """Derive a stable per-conversation notification tag from .../brain/<conv_id>/.../transcript.jsonl."""
+    conv_id = _extract_conv_id(path)
+    clean = re.sub(r"[^A-Za-z0-9_-]", "_", conv_id).strip("_")
+    return f"agy_turn_{clean[:12]}" if clean else "agy_turn_done"
+
+
+def _is_user_conversation(path, state):
+    """Return True iff the transcript represents an interactive user conversation (not a subagent)."""
+    cache = state.setdefault("user_convo_cache", {})
+    if path in cache:
+        return cache[path]
+
+    saw_system_head = False
+    parsed_count = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for _ in range(16):
+                line = f.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                parsed_count += 1
+                rec_type = rec.get("type", "")
+                rec_source = rec.get("source", "")
+                if rec_type == "USER_INPUT" or rec_source == "USER_EXPLICIT":
+                    cache[path] = True
+                    return True
+                if parsed_count == 1 and (rec_type == "SYSTEM_MESSAGE" or rec_source == "SYSTEM"):
+                    saw_system_head = True
+                if parsed_count >= 8:
+                    break
+    except OSError:
+        return False
+
+    if saw_system_head and parsed_count >= 2:
+        cache[path] = False
+    return False
+
+
+def _check_conversation_turns(state, brain_glob=None):
+    """Watch active user transcript.jsonl files and notify when an agent turn completes."""
+    file_sig = state.setdefault("transcript_mtimes", {})
     working = state.setdefault("working_convos", set())
     notified_steps = state.setdefault("notified_steps", {})
     initialized = state.get("transcript_initialized", False)
 
-    for path in glob.glob(BRAIN_GLOB):
+    for path in glob.glob(brain_glob or BRAIN_GLOB):
         try:
-            mtime = os.stat(path).st_mtime
+            st = os.stat(path)
+            sig = (getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
         except OSError:
             continue
 
-        if mtimes.get(path) == mtime:
+        if not _is_user_conversation(path, state):
             continue
-        mtimes[path] = mtime
+
+        if file_sig.get(path) == sig:
+            continue
+        file_sig[path] = sig
 
         rec = _read_last_jsonl_record(path)
         if not rec:
@@ -116,6 +178,8 @@ def _check_conversation_turns(state):
         status = rec.get("status", "")
         tool_calls = rec.get("tool_calls") or []
         tool_names = [tc.get("name", "") for tc in tool_calls if isinstance(tc, dict)]
+        conv_id = _extract_conv_id(path) or None
+        turn_tag = _turn_tag_for_path(path)
 
         if not initialized:
             notified_steps[path] = step_idx
@@ -123,7 +187,7 @@ def _check_conversation_turns(state):
                 working.add(path)
             continue
 
-        if step_type == "USER_INPUT" or (step_type == "PLANNER_RESPONSE" and tool_names and "ask_question" not in tool_names) or step_type == "GENERIC":
+        if step_type == "USER_INPUT" or (step_type == "PLANNER_RESPONSE" and tool_names and "ask_question" not in tool_names):
             working.add(path)
         elif step_type == "PLANNER_RESPONSE" and status == "DONE":
             if "ask_question" in tool_names and notified_steps.get(path) != step_idx:
@@ -132,7 +196,9 @@ def _check_conversation_turns(state):
                 _post_gateway_notification(
                     "Antigravity: Input Needed",
                     "The agent has a question and is waiting for your response.",
-                    tag="agy_turn_done",
+                    tag=turn_tag,
+                    channel="agy_alerts",
+                    cascade_id=conv_id,
                 )
             elif not tool_names and (path in working or notified_steps.get(path, -1) < step_idx):
                 notified_steps[path] = step_idx
@@ -147,7 +213,9 @@ def _check_conversation_turns(state):
                 _post_gateway_notification(
                     "Antigravity: Task Complete",
                     preview,
-                    tag="agy_turn_done",
+                    tag=turn_tag,
+                    channel="agy_alerts",
+                    cascade_id=conv_id,
                 )
 
     state["transcript_initialized"] = True
@@ -332,7 +400,7 @@ def daemon_loop():
         except Exception as e:
             log(f"Daemon scheduler error: {e}")
 
-        STOP_EVENT.wait(5)
+        STOP_EVENT.wait(2)
     try:
         if read_daemon_pid() == os.getpid():
             os.unlink(PID_FILE)

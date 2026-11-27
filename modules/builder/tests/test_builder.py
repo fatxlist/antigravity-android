@@ -146,6 +146,87 @@ class TestBuilder(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0, "08_sign.sh must fail closed without release signing credentials")
         self.assertIn("Refusing to sign release APK", res.stderr)
 
+    def test_single_pass_package_aligned_apk_and_check(self):
+        import struct
+        base_apk = os.path.join(self.tmp_dir, "base.apk")
+        with zipfile.ZipFile(base_apk, "w") as z:
+            z.writestr("AndroidManifest.xml", b"MANIFEST_DATA_123", compress_type=zipfile.ZIP_STORED)
+            z.writestr("lib/arm64-v8a/libbase.so", b"\x7fELF" + b"\x01" * 64, compress_type=zipfile.ZIP_STORED)
+
+        dex_path = os.path.join(self.tmp_dir, "classes.dex")
+        with open(dex_path, "wb") as f:
+            f.write(b"dex\n035\x00" + b"A" * 128)
+
+        assets_dir = os.path.join(self.tmp_dir, "staging", "assets")
+        os.makedirs(os.path.join(assets_dir, "runtime"), exist_ok=True)
+        os.makedirs(os.path.join(assets_dir, "web"), exist_ok=True)
+        with open(os.path.join(assets_dir, "runtime", "libtest.so"), "wb") as f:
+            f.write(b"\x7fELF" + b"\x00" * 256)
+        with open(os.path.join(assets_dir, "web", "index.html"), "w", encoding="utf-8") as f:
+            f.write("<html><body>ok</body></html>")
+        with open(os.path.join(assets_dir, "data.zip"), "wb") as f:
+            f.write(b"PK\x05\x06" + b"\x00" * 18)
+
+        for fast_store in (False, True):
+            out_apk = os.path.join(self.tmp_dir, f"out_{int(fast_store)}.apk")
+            ok = align.package_aligned_apk(base_apk, out_apk, dex_path, assets_dir, alignment=4, fast_store=fast_store)
+            self.assertTrue(ok)
+            chk_ok, errs = align.check_alignment(out_apk, alignment=4)
+            self.assertTrue(chk_ok, f"alignment errors (fast={fast_store}): {errs}")
+            with zipfile.ZipFile(out_apk, "r") as zout, open(out_apk, "rb") as fout:
+                names = set(zout.namelist())
+                self.assertEqual(names, {
+                    "AndroidManifest.xml",
+                    "lib/arm64-v8a/libbase.so",
+                    "classes.dex",
+                    "assets/runtime/libtest.so",
+                    "assets/web/index.html",
+                    "assets/data.zip",
+                })
+                self.assertEqual(zout.read("classes.dex"), b"dex\n035\x00" + b"A" * 128)
+                self.assertEqual(zout.read("assets/web/index.html"), b"<html><body>ok</body></html>")
+                base_so = zout.getinfo("lib/arm64-v8a/libbase.so")
+                self.assertEqual(base_so.compress_type, zipfile.ZIP_STORED)
+                fout.seek(base_so.header_offset + 26)
+                nlen, elen = struct.unpack("<HH", fout.read(4))
+                self.assertEqual((base_so.header_offset + 30 + nlen + elen) % 4096, 0)
+
+                asset_so = zout.getinfo("assets/runtime/libtest.so")
+                if fast_store:
+                    self.assertEqual(zout.getinfo("classes.dex").compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(zout.getinfo("assets/web/index.html").compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(asset_so.compress_type, zipfile.ZIP_STORED)
+                    fout.seek(asset_so.header_offset + 26)
+                    anlen, aelen = struct.unpack("<HH", fout.read(4))
+                    self.assertEqual((asset_so.header_offset + 30 + anlen + aelen) % 4096, 0)
+                else:
+                    self.assertEqual(zout.getinfo("classes.dex").compress_type, zipfile.ZIP_DEFLATED)
+                    self.assertEqual(zout.getinfo("assets/web/index.html").compress_type, zipfile.ZIP_DEFLATED)
+                    self.assertEqual(asset_so.compress_type, zipfile.ZIP_DEFLATED)
+
+    def test_fast_stage_assets_manifest_reuse(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("stage_assets_mod", os.path.join(BUILDER_DIR, "05_stage_assets.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        env_src = os.path.join(self.tmp_dir, "env_src")
+        env_dst = os.path.join(self.tmp_dir, "env_dst")
+        os.makedirs(os.path.join(env_dst, "bootstrap"), exist_ok=True)
+        os.makedirs(env_src, exist_ok=True)
+        with open(os.path.join(env_src, "manifest.json"), "w", encoding="utf-8") as f:
+            f.write('{"version": 1}')
+        self.assertFalse(mod.can_reuse_staged_env(env_src, env_dst))
+        with open(os.path.join(env_dst, "manifest.json"), "w", encoding="utf-8") as f:
+            f.write('{"version": 1}')
+        with open(os.path.join(env_dst, "bootstrap", "bootstrap.tar.gz"), "wb") as f:
+            f.write(b"tgz")
+        self.assertTrue(mod.can_reuse_staged_env(env_src, env_dst))
+        with open(os.path.join(env_src, "manifest.json"), "w", encoding="utf-8") as f:
+            f.write('{"version": 2}')
+        self.assertFalse(mod.can_reuse_staged_env(env_src, env_dst))
+        self.assertFalse(mod.can_reuse_staged_runtime(os.path.join(self.tmp_dir, "missing_runtime"), os.path.dirname(os.path.dirname(BUILDER_DIR))))
+
 
 if __name__ == "__main__":
     unittest.main()

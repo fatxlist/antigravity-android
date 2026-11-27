@@ -38,6 +38,10 @@ var state = {
   voiceInterim: '',
   voiceServiceActive: false,
   voiceServiceMuted: false,
+  voiceWsState: 'idle',
+  voiceLastError: '',
+  voiceMicLevel: 0,
+  voiceMeterCleanup: null,
   activeVoiceSockets: [],
   activeMicTracks: [],
   toastTimer: 0,
@@ -1065,6 +1069,12 @@ function onVoiceServiceStateChanged(payload) {
   var wasActive = state.voiceServiceActive;
   state.voiceServiceActive = active;
   state.voiceServiceMuted = active ? muted : false;
+  if (!active) {
+    stopMicLevelMeter();
+    if (state.activeVoiceSockets.length === 0 && state.voiceWsState !== 'error') {
+      state.voiceWsState = 'idle';
+    }
+  }
 
   applyMicTracksMute(state.voiceServiceMuted);
 
@@ -1096,31 +1106,127 @@ function isVoiceWebSocketUrl(url) {
   return /\/voice\/ws(?:[?#]|$)/i.test(String(url));
 }
 
+function formatVoiceMicError(err) {
+  var name = err && err.name ? String(err.name) : '';
+  var msg = err && err.message ? String(err.message) : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError' || /permission|denied/i.test(msg)) {
+    return 'Microphone permission denied — allow Microphone in Android Settings';
+  }
+  if (name === 'NotFoundError' || /no.*device|not found/i.test(msg)) {
+    return 'No microphone input device found';
+  }
+  if (name === 'NotReadableError' || /in use|busy|could not start audio source/i.test(msg)) {
+    return 'Microphone is busy in another app';
+  }
+  return msg ? ('Microphone error: ' + msg) : 'Microphone initialization failed';
+}
+
+function stopMicLevelMeter() {
+  if (typeof state.voiceMeterCleanup === 'function') {
+    try { state.voiceMeterCleanup(); } catch (_) {}
+    state.voiceMeterCleanup = null;
+  }
+  state.voiceMicLevel = 0;
+  try {
+    var fill = doc && doc.getElementById('ag-mb-voice-level-fill');
+    if (fill) fill.style.width = '0%';
+  } catch (_) {}
+}
+
+function attachMicLevelMeter(stream) {
+  stopMicLevelMeter();
+  try {
+    var Ctx = global.AudioContext || global.webkitAudioContext;
+    if (!Ctx || !stream || typeof stream.getAudioTracks !== 'function' || !stream.getAudioTracks().length) {
+      return;
+    }
+    var ctx = new Ctx();
+    if (typeof ctx.createMediaStreamSource !== 'function' || typeof ctx.createAnalyser !== 'function') {
+      if (typeof ctx.close === 'function') ctx.close().catch(function () {});
+      return;
+    }
+    var source = ctx.createMediaStreamSource(stream);
+    var analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    var bins = new Uint8Array(analyser.frequencyBinCount);
+    var timer = setInterval(function () {
+      try {
+        analyser.getByteTimeDomainData(bins);
+        var sumSq = 0;
+        for (var i = 0; i < bins.length; i++) {
+          var v = (bins[i] - 128) / 128;
+          sumSq += v * v;
+        }
+        var rms = Math.sqrt(sumSq / (bins.length || 1));
+        var pct = Math.max(0, Math.min(100, Math.round(rms * 260)));
+        state.voiceMicLevel = state.voiceServiceMuted ? 0 : pct;
+        var fill = doc && doc.getElementById('ag-mb-voice-level-fill');
+        if (fill) fill.style.width = state.voiceMicLevel + '%';
+      } catch (_) {}
+    }, 180);
+    state.voiceMeterCleanup = function () {
+      clearInterval(timer);
+      try { source.disconnect(); } catch (_) {}
+      try { analyser.disconnect(); } catch (_) {}
+      try { if (typeof ctx.close === 'function') ctx.close().catch(function () {}); } catch (_) {}
+    };
+  } catch (_) {}
+}
+
 function trackVoiceSocket(ws) {
   if (!ws) return;
   var cleaned = false;
+  state.voiceWsState = 'connecting';
+  state.voiceLastError = '';
+  if (typeof syncDrawerState === 'function') syncDrawerState();
+
   function onOpen() {
     if (cleaned) return;
+    state.voiceWsState = 'open';
+    state.voiceLastError = '';
     if (state.activeVoiceSockets.indexOf(ws) === -1) {
       state.activeVoiceSockets.push(ws);
     }
     if (state.activeVoiceSockets.length === 1) {
       startNativeVoiceService();
     }
+    if (typeof syncDrawerState === 'function') syncDrawerState();
+  }
+  function onError() {
+    state.voiceWsState = 'error';
+    state.voiceLastError = 'Live Voice WebSocket (/voice/ws) connection error';
+    if (typeof showBridgeToast === 'function') showBridgeToast(state.voiceLastError);
+    onDone();
+  }
+  function onClose(ev) {
+    if (ev && typeof ev.code === 'number' && ev.code !== 1000 && ev.code !== 1005) {
+      state.voiceWsState = 'error';
+      state.voiceLastError = 'Live Voice closed (code ' + ev.code + (ev.reason ? ': ' + ev.reason : '') + ')';
+      if (typeof showBridgeToast === 'function') showBridgeToast(state.voiceLastError);
+    }
+    onDone();
   }
   function onDone() {
     if (cleaned) return;
     cleaned = true;
     var idx = state.activeVoiceSockets.indexOf(ws);
     if (idx >= 0) state.activeVoiceSockets.splice(idx, 1);
-    if (state.activeVoiceSockets.length === 0 && state.voiceServiceActive) {
-      stopNativeVoiceService();
+    if (state.activeVoiceSockets.length === 0) {
+      stopMicLevelMeter();
+      if (state.voiceWsState !== 'error') {
+        state.voiceWsState = 'idle';
+      }
+      if (state.voiceServiceActive) {
+        stopNativeVoiceService();
+      }
     }
+    if (typeof syncDrawerState === 'function') syncDrawerState();
   }
   try {
     ws.addEventListener('open', onOpen);
-    ws.addEventListener('close', onDone);
-    ws.addEventListener('error', onDone);
+    ws.addEventListener('close', onClose);
+    ws.addEventListener('error', onError);
   } catch (_) {}
 }
 
@@ -1129,14 +1235,7 @@ function installVoiceWebSocketHook() {
   if (typeof NativeWS !== 'function' || NativeWS.__agVoiceWrapped) return;
 
   function WrappedWebSocket(url, protocols) {
-    var ws;
-    if (typeof Reflect === 'object' && typeof Reflect.construct === 'function') {
-      ws = arguments.length > 1
-        ? Reflect.construct(NativeWS, [url, protocols], new.target || WrappedWebSocket)
-        : Reflect.construct(NativeWS, [url], new.target || WrappedWebSocket);
-    } else {
-      ws = arguments.length > 1 ? new NativeWS(url, protocols) : new NativeWS(url);
-    }
+    var ws = arguments.length > 1 ? new NativeWS(url, protocols) : new NativeWS(url);
     if (isVoiceWebSocketUrl(url)) {
       trackVoiceSocket(ws);
     }
@@ -1164,6 +1263,7 @@ function installMicTrackObserver() {
       var promise = origGum(constraints);
       if (promise && typeof promise.then === 'function' && constraints && constraints.audio) {
         promise.then(function (stream) {
+          state.voiceLastError = '';
           if (!stream || typeof stream.getAudioTracks !== 'function') return;
           var tracks = stream.getAudioTracks();
           for (var i = 0; i < tracks.length; i++) {
@@ -1179,15 +1279,82 @@ function installMicTrackObserver() {
               tr.addEventListener('ended', function (ev) {
                 var idx = state.activeMicTracks.indexOf(ev.target);
                 if (idx >= 0) state.activeMicTracks.splice(idx, 1);
+                if (state.activeMicTracks.length === 0) stopMicLevelMeter();
               });
             } catch (_) {}
           }
-        }, function () {});
+          attachMicLevelMeter(stream);
+        }, function (err) {
+          stopMicLevelMeter();
+          state.voiceWsState = 'error';
+          state.voiceLastError = formatVoiceMicError(err);
+          if (typeof showBridgeToast === 'function') showBridgeToast(state.voiceLastError);
+          if (typeof syncDrawerState === 'function') syncDrawerState();
+        });
       }
       return promise;
     };
     wrappedGum.__agVoiceWrapped = true;
     md.getUserMedia = wrappedGum;
+  } catch (_) {}
+}
+
+function installMicrophonePermissionShim() {
+  try {
+    var perms = global.navigator && global.navigator.permissions;
+    if (!perms || typeof perms.query !== 'function' || perms.query.__agMicWrapped) return;
+    var origQuery = perms.query.bind(perms);
+
+    var makeMicStatus = function (nativeState) {
+      return {
+        name: 'microphone',
+        state: nativeState,
+        onchange: null,
+        addEventListener: function () {},
+        removeEventListener: function () {}
+      };
+    };
+
+    var readNativeMicState = function () {
+      try {
+        var android = getAndroid();
+        if (android && typeof android.getMicrophonePermissionState === 'function') {
+          var s = String(android.getMicrophonePermissionState() || '');
+          if (s === 'granted' || s === 'prompt') return s;
+        }
+      } catch (_) {}
+      return '';
+    };
+
+    var wrappedQuery = function (desc) {
+      if (!desc || desc.name !== 'microphone') {
+        return origQuery(desc);
+      }
+      return Promise.resolve().then(function () {
+        return origQuery(desc);
+      }).then(function (status) {
+        if (status && status.state === 'denied') {
+          var nativeState = readNativeMicState();
+          if (nativeState) return makeMicStatus(nativeState);
+        }
+        return status;
+      }, function (err) {
+        var nativeState = readNativeMicState();
+        if (nativeState) return makeMicStatus(nativeState);
+        throw err;
+      });
+    };
+
+    wrappedQuery.__agMicWrapped = true;
+    try {
+      perms.query = wrappedQuery;
+    } catch (_) {
+      Object.defineProperty(perms, 'query', {
+        value: wrappedQuery,
+        configurable: true,
+        writable: true
+      });
+    }
   } catch (_) {}
 }
 
@@ -1640,6 +1807,9 @@ function ensureBridgeStyles() {
     '.ag-mb-btn[data-active="true"] { background: #ef4444; color: #ffffff; }',
     '.ag-mb-voice-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }',
     '.ag-mb-voice-status { font-size: 12px; opacity: 0.74; }',
+    '#ag-mb-voice-level { width: 100%; height: 4px; border-radius: 999px; background: rgba(148,163,184,0.22); overflow: hidden; display: none; }',
+    '#ag-mb-voice-level-fill { width: 0%; height: 100%; background: #38bdf8; transition: width 0.14s linear; }',
+    '#ag-mb-voice-diag { font-size: 11px; color: #f87171; display: none; }',
     '#ag-mb-voice-interim { font-size: 12px; opacity: 0.85; font-style: italic; display: none; }',
     '#ag-mb-voice-interim.ag-mb-visible { display: block; }',
     '#ag-mb-drawer-share { width: 100%; display: none; }',
@@ -1753,9 +1923,31 @@ function syncDrawerState() {
   var voiceStatus = doc.getElementById('ag-mb-voice-status');
   var voiceActive = state.voiceServiceActive;
   if (voiceStatus) {
-    voiceStatus.textContent = voiceActive
-      ? ('Voice service: ' + (state.voiceServiceMuted ? 'Active (Muted)' : 'Active'))
-      : 'Voice service: Idle';
+    if (voiceActive) {
+      voiceStatus.textContent = 'Voice service: ' + (state.voiceServiceMuted ? 'Active (Muted)' : 'Active');
+    } else if (state.voiceWsState === 'connecting') {
+      voiceStatus.textContent = 'Voice service: Connecting\u2026';
+    } else if (state.voiceWsState === 'error') {
+      voiceStatus.textContent = 'Voice service: Error';
+    } else {
+      voiceStatus.textContent = 'Voice service: Idle';
+    }
+  }
+  var levelWrap = doc.getElementById('ag-mb-voice-level');
+  var levelFill = doc.getElementById('ag-mb-voice-level-fill');
+  if (levelWrap && levelFill) {
+    levelWrap.style.display = (voiceActive || state.voiceMicLevel > 0) ? 'block' : 'none';
+    levelFill.style.width = Math.max(0, Math.min(100, state.voiceMicLevel || 0)) + '%';
+  }
+  var voiceDiag = doc.getElementById('ag-mb-voice-diag');
+  if (voiceDiag) {
+    if (state.voiceLastError) {
+      voiceDiag.textContent = state.voiceLastError;
+      voiceDiag.style.display = 'block';
+    } else {
+      voiceDiag.textContent = '';
+      voiceDiag.style.display = 'none';
+    }
   }
   var muteBtn = doc.getElementById('ag-mb-voice-mute');
   if (muteBtn) {
@@ -1977,6 +2169,15 @@ function buildAndroidToolsCard(onActionDone) {
   voiceStatus.className = 'ag-mb-voice-status';
   voiceStatus.textContent = 'Voice service: Idle';
 
+  var levelWrap = doc.createElement('div');
+  levelWrap.id = 'ag-mb-voice-level';
+  var levelFill = doc.createElement('div');
+  levelFill.id = 'ag-mb-voice-level-fill';
+  levelWrap.appendChild(levelFill);
+
+  var voiceDiag = doc.createElement('div');
+  voiceDiag.id = 'ag-mb-voice-diag';
+
   voiceBtns.appendChild(dictateBtn);
   voiceBtns.appendChild(muteBtn);
   voiceBtns.appendChild(stopSvcBtn);
@@ -1984,6 +2185,8 @@ function buildAndroidToolsCard(onActionDone) {
   voiceRowWrap.appendChild(voiceBtns);
   voiceRowWrap.appendChild(interimEl);
   voiceRowWrap.appendChild(voiceStatus);
+  voiceRowWrap.appendChild(levelWrap);
+  voiceRowWrap.appendChild(voiceDiag);
   card.appendChild(voiceRowWrap);
 
   // Clipboard Image Paste
@@ -2210,6 +2413,30 @@ function onExtraKeysVisibilityChanged(visible) {
   syncDrawerState();
 }
 
+function openConversation(cascadeId) {
+  var id = typeof cascadeId === 'string' ? cascadeId.trim() : '';
+  if (!id || !/^[A-Za-z0-9_.-]{1,128}$/.test(id)) {
+    return { ok: false, reason: 'invalid_cascade_id' };
+  }
+  var targetPath = '/c/' + encodeURIComponent(id);
+  if (global.location && global.location.pathname === targetPath) {
+    return { ok: true, cascadeId: id, path: targetPath, unchanged: true };
+  }
+  try {
+    if (global.history && typeof global.history.pushState === 'function') {
+      global.history.pushState(null, '', targetPath);
+    }
+  } catch (_) {}
+  try {
+    if (typeof global.CustomEvent === 'function') {
+      global.dispatchEvent(new CustomEvent('ag-open-conversation', {
+        detail: { cascadeId: id, path: targetPath }
+      }));
+    }
+  } catch (_) {}
+  return { ok: true, cascadeId: id, path: targetPath };
+}
+
 function installMobileBridge() {
   if (state.installed) return;
   state.installed = true;
@@ -2218,6 +2445,7 @@ function installMobileBridge() {
   state.dictating = isVoiceDictatingNative();
   installVoiceWebSocketHook();
   installMicTrackObserver();
+  installMicrophonePermissionShim();
   installClipboardImageInterceptor();
   installFocusTracking();
   mountQuickControls();
@@ -2227,14 +2455,21 @@ function installMobileBridge() {
     global.__AG_PENDING_SHARED_PAYLOAD__ = null;
     deliverSharedPayload(stashed);
   }
+  if (global.__AG_PENDING_CASCADE_ID__) {
+    var pendingConv = global.__AG_PENDING_CASCADE_ID__;
+    global.__AG_PENDING_CASCADE_ID__ = null;
+    openConversation(pendingConv);
+  }
 }
 
-// Install WebSocket/mic hooks immediately so early voice connections are observed.
+// Install WebSocket/mic/permission hooks immediately so early voice checks and connections are observed.
 installVoiceWebSocketHook();
 installMicTrackObserver();
+installMicrophonePermissionShim();
 
 // Expose top-level native callback hooks immediately (before main.js / onUiReady).
 global.__agDeliverSharedPayload = deliverSharedPayload;
+global.__agOpenConversation = openConversation;
 global.__agExtraKey = dispatchExtraKey;
 global.__agExtraKeysVisibilityChanged = onExtraKeysVisibilityChanged;
 global.__agDeliverVoiceText = deliverVoiceText;
@@ -2245,6 +2480,7 @@ global.__agDeliverPastedImage = deliverPastedImage;
 global.__agMobileBridge = {
   __installed: true,
   deliverSharedPayload: deliverSharedPayload,
+  openConversation: openConversation,
   dispatchExtraKey: dispatchExtraKey,
   deliverVoiceText: deliverVoiceText,
   deliverPastedImage: deliverPastedImage,
@@ -2281,6 +2517,9 @@ global.__agMobileBridge = {
       dictating: state.dictating,
       voiceServiceActive: state.voiceServiceActive || isVoiceServiceActiveNative(),
       voiceServiceMuted: state.voiceServiceMuted,
+      voiceWsState: state.voiceWsState,
+      voiceLastError: state.voiceLastError,
+      voiceMicLevel: state.voiceMicLevel,
       activeVoiceSockets: state.activeVoiceSockets.length,
       desktopMode: getDesktopModeState(),
       extraKeysVisible: getExtraKeysState(),

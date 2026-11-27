@@ -223,3 +223,27 @@ bash modules/io/tests/run_all.sh
 
 ### 8.6. Дублирование кода с Java-уровнем
 - **Статус**: Архитектурный бэклог. Логика распознавания ссылок и префиксов в `filter_open_url.py` дублирует `OpenUrlWatcher.java`. Рекомендуется использовать единую шину через `broadcast_receiver.sh` в последующих заходах.
+
+---
+
+## Subdirectories & Boundaries
+- [Core Bus](./core_bus/README.md) - Event envelope schema validation/serialization (`envelope.py`), wildcard routing (`subscriber_router.py`), and `EventBroker` dispatch (`event_broker.py`).
+- [Inputs](./inputs/README.md) - Inbound IPC adapters for Android broadcasts (`broadcast_receiver.sh`), named FIFOs with FUSE relocation (`fifo_input.py`), UNIX stream sockets (`unix_socket_input.py`), and input producer templates (`./inputs/templates/README.md`).
+- [Interceptors](./interceptors/README.md) - Process `stdout`/`stderr` stream tee (`stream_splitter.py`) and stateless line filters (`./interceptors/filters/README.md`).
+- [Outputs](./outputs/README.md) - Outbound event sinks for Android open-URL broadcasts (`broadcast_emitter.sh`), JSONL file logging (`file_sink.py`), Android tray notifications (`notify_tray.sh`), UNIX socket forwarding (`unix_socket_emitter.py`), and output sink templates (`./outputs/templates/README.md`).
+
+## Invariants
+- `[core_bus/envelope.py:validate_event]` Every event published through the bus must be a JSON dictionary containing `("event", "timestamp", "source", "data")` with a non-empty string `event` and a `dict` `data`.
+- `[core_bus/event_broker.py:EventBroker.publish]` Events are validated before dispatch; `.sh` output scripts are always launched via an explicit interpreter (`/system/bin/sh` or `bash`) and Python scripts via `sys.executable` to avoid Android `noexec` failures, with per-dispatch timeout enforcement (`dispatch_timeout=5.0` default) and child process kill/wait cleanup.
+- `[inputs/fifo_input.py:get_safe_pipe_path]` / `[inputs/broadcast_receiver.sh:FIFO]` FIFO paths targeting Android FUSE mounts (`/storage/`, `/sdcard/`, `/mnt/sdcard/`, `/mnt/runtime/`) are redirected to a writable internal runtime directory, and FIFO writes use non-blocking or 1-second timeout-bounded I/O to avoid blocking when no reader is connected.
+- `[interceptors/stream_splitter.py:process_stream]` Lines from `stream_in` are written and flushed to `stream_out` before filtering, and event publishing runs asynchronously on a daemon worker thread drained on exit via `None` sentinel and `worker_thread.join()`.
+- `[outputs/notify_tray.sh:RAW_JSON]` / `[outputs/broadcast_emitter.sh:RAW_JSON]` Shell output sinks exit `0` on empty stdin and suppress external dispatch errors (`|| true`).
+
+## Side Effects
+- `[core_bus/event_broker.py:EventBroker.publish]` Spawns external output script subprocesses via `subprocess.Popen` (passing JSON on `stdin`), invokes in-memory Python callbacks, and writes handler/timeout diagnostics to `sys.stderr`.
+- `[inputs/fifo_input.py:run_fifo_listener]` / `[inputs/unix_socket_input.py:run_socket_listener]` Create named FIFO pipes (persisted) and `AF_UNIX` stream sockets (removed on shutdown) on the filesystem and forward deserialized events to `EventBroker`.
+- `[interceptors/stream_splitter.py:process_stream]` Spawns daemon thread `"StreamSplitterWorker"` and echoes `stream_in` to `stream_out`.
+- `[outputs/broadcast_emitter.sh:/system/bin/am]` / `[outputs/notify_tray.sh:agy-notify]` / `[outputs/file_sink.py:append_event]` / `[outputs/unix_socket_emitter.py:emit_to_socket]` Emit Android broadcasts (`com.agy.ACTION_OPEN_URL`, `com.agy.ACTION_NOTIFY`), post notifications via `agy-notify`, append JSONL records to `~/.gemini/events.jsonl` (or `AGY_EVENT_LOG`), and transmit lines over `AF_UNIX` client sockets.
+
+## Verification
+- Run: `bash modules/io/tests/run_all.sh`

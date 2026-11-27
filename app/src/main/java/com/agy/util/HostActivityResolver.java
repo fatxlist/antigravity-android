@@ -16,7 +16,31 @@ import com.agy.ui.launcher.LauncherLightActivity;
  */
 public final class HostActivityResolver {
 
+    public static final String EXTRA_CASCADE_ID = "com.agy.EXTRA_CASCADE_ID";
+
     private HostActivityResolver() {
+    }
+
+    /** Validates and trims an external conversation/cascade identifier, or returns null. */
+    public static String sanitizeCascadeId(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || trimmed.length() > 128) {
+            return null;
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z')
+                    || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9')
+                    || c == '_' || c == '-' || c == '.';
+            if (!ok) {
+                return null;
+            }
+        }
+        return trimmed;
     }
 
     /** Returns the active host Activity class, or the enabled launcher entry. */
@@ -47,11 +71,20 @@ public final class HostActivityResolver {
 
     /** Builds a reusable launch Intent targeting the resolved host Activity. */
     public static Intent createOpenIntent(Context context) {
+        return createOpenIntent(context, null);
+    }
+
+    /** Builds a reusable launch Intent targeting the resolved host Activity with optional conversation deep-link. */
+    public static Intent createOpenIntent(Context context, String cascadeId) {
         Intent intent = new Intent(context, resolve(context));
         intent.setAction(Intent.ACTION_MAIN);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_SINGLE_TOP
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        String cleanId = sanitizeCascadeId(cascadeId);
+        if (cleanId != null) {
+            intent.putExtra(EXTRA_CASCADE_ID, cleanId);
+        }
         return intent;
     }
 }

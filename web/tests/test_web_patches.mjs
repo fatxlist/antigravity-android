@@ -339,7 +339,49 @@ function createMockDom() {
   let voiceSvcActive = false;
   let voiceMuted = false;
   let voiceDictating = false;
+  let micPermState = 'prompt';
   let mockClipboardImg = null;
+  let nextGumError = null;
+  const pushedPaths = [];
+  const winListeners = new Map();
+  const dispatchedConvEvents = [];
+
+  windowObj.location.pathname = '/';
+  windowObj.CustomEvent = class MockCustomEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  };
+  windowObj.addEventListener = (type, fn) => {
+    if (!winListeners.has(type)) winListeners.set(type, []);
+    winListeners.get(type).push(fn);
+  };
+  windowObj.dispatchEvent = (ev) => {
+    for (const fn of (winListeners.get(ev.type) || [])) fn(ev);
+    return true;
+  };
+  windowObj.addEventListener('ag-open-conversation', (ev) => dispatchedConvEvents.push(ev.detail));
+  windowObj.history = {
+    pushState(_state, _title, url) {
+      pushedPaths.push(String(url));
+      windowObj.location.pathname = String(url);
+    }
+  };
+  windowObj.navigator.mediaDevices = {
+    async getUserMedia(constraints) {
+      if (nextGumError) {
+        const err = nextGumError;
+        nextGumError = null;
+        throw err;
+      }
+      return { getAudioTracks: () => [] };
+    }
+  };
+
+  windowObj.navigator.permissions = {
+    query: async (desc) => ({ name: desc?.name || '', state: 'denied' })
+  };
 
   // Lightweight mock WebSocket so we can verify /voice/ws auto-service hook
   class MockWebSocket {
@@ -354,10 +396,10 @@ function createMockDom() {
       if (!this._listeners.has(type)) this._listeners.set(type, []);
       this._listeners.get(type).push(fn);
     }
-    emit(type) {
+    emit(type, extra = {}) {
       if (type === 'open') this.readyState = 1;
       if (type === 'close') this.readyState = 3;
-      for (const fn of (this._listeners.get(type) || [])) fn({ type, target: this });
+      for (const fn of (this._listeners.get(type) || [])) fn({ type, target: this, ...extra });
     }
     close() {
       this.closed = true;
@@ -386,6 +428,7 @@ function createMockDom() {
     startVoiceDictation: (tok) => { voiceDictating = true; calls.dictateStart.push(tok); return true; },
     stopVoiceDictation: (tok) => { voiceDictating = false; calls.dictateStop.push(tok); return true; },
     isVoiceDictating: () => voiceDictating,
+    getMicrophonePermissionState: () => micPermState,
     hasClipboardImage: () => !!mockClipboardImg,
     readClipboardImage: (tok) => {
       calls.clipboardReads.push(tok);
@@ -541,6 +584,56 @@ function createMockDom() {
   assert.equal(voiceWs.closed, true, 'Stop Voice from notification should close active /voice/ws');
   assert.ok(document.getElementById('ag-mb-voice-status').textContent.includes('Idle'));
 
+  // 1h-bis. Microphone permission shim overrides false WebView 'denied' using native state
+  micPermState = 'prompt';
+  const micPerm1 = await windowObj.navigator.permissions.query({ name: 'microphone' });
+  assert.equal(micPerm1.state, 'prompt', 'Should map false WebView denied to prompt');
+  micPermState = 'granted';
+  const micPerm2 = await windowObj.navigator.permissions.query({ name: 'microphone' });
+  assert.equal(micPerm2.state, 'granted', 'Should reflect native granted state');
+  const otherPerm = await windowObj.navigator.permissions.query({ name: 'clipboard-read' });
+  assert.equal(otherPerm.state, 'denied', 'Non-microphone permissions must pass through untouched');
+
+  // 1h-ter. Notification deep-link (__agOpenConversation) + /voice/ws & getUserMedia diagnostics
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  assert.deepEqual(clone(windowObj.__agOpenConversation('')), { ok: false, reason: 'invalid_cascade_id' });
+  assert.deepEqual(clone(windowObj.__agOpenConversation('../evil')), { ok: false, reason: 'invalid_cascade_id' });
+  assert.deepEqual(clone(windowObj.__agOpenConversation('a/b')), { ok: false, reason: 'invalid_cascade_id' });
+  assert.equal(pushedPaths.length, 0, 'Invalid cascade IDs must not mutate history');
+
+  const convOpenRes = clone(windowObj.__agOpenConversation('conv-42_test'));
+  assert.deepEqual(convOpenRes, { ok: true, cascadeId: 'conv-42_test', path: '/c/conv-42_test' });
+  assert.deepEqual(pushedPaths, ['/c/conv-42_test']);
+  assert.equal(dispatchedConvEvents.length, 1);
+  assert.deepEqual(clone(dispatchedConvEvents[0]), { cascadeId: 'conv-42_test', path: '/c/conv-42_test' });
+  assert.deepEqual(clone(windowObj.__agOpenConversation('conv-42_test')), {
+    ok: true,
+    cascadeId: 'conv-42_test',
+    path: '/c/conv-42_test',
+    unchanged: true
+  });
+
+  const voiceWsErr = new windowObj.WebSocket('wss://127.0.0.1:45157/voice/ws');
+  voiceWsErr.emit('open');
+  voiceWsErr.emit('close', { code: 1006, reason: 'network_lost' });
+  const diagEl = document.getElementById('ag-mb-voice-diag');
+  assert.equal(windowObj.__agMobileBridge.probe().voiceWsState, 'error');
+  assert.ok(windowObj.__agMobileBridge.probe().voiceLastError.includes('1006'));
+  assert.ok(windowObj.__agMobileBridge.probe().voiceLastError.includes('network_lost'));
+  assert.equal(diagEl.style.display, 'block');
+  assert.ok(diagEl.textContent.includes('network_lost'));
+  assert.ok(document.getElementById('ag-mb-voice-status').textContent.includes('Error'));
+
+  const gumErr = new Error('Permission denied');
+  gumErr.name = 'NotAllowedError';
+  nextGumError = gumErr;
+  await assert.rejects(() => windowObj.navigator.mediaDevices.getUserMedia({ audio: true }));
+  await Promise.resolve();
+  assert.equal(windowObj.__agMobileBridge.probe().voiceWsState, 'error');
+  assert.ok(windowObj.__agMobileBridge.probe().voiceLastError.includes('Microphone permission denied'));
+  assert.ok(diagEl.textContent.includes('Microphone permission denied'));
+  assert.ok(document.getElementById('ag-mb-toast').textContent.includes('Microphone permission denied'));
+
   // 1i. Clipboard image paste (__agDeliverPastedImage, paste interceptor, no-double-paste, fallbacks)
   assert.equal(typeof windowObj.__agDeliverPastedImage, 'function');
   const tinyPngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -626,6 +719,14 @@ function createMockDom() {
 {
   const { windowObj } = createMockDom();
   windowObj.location = { search: '?port=45123', href: 'https://127.0.0.1:45123/?port=45123' };
+  const nativeNotifications = [];
+  windowObj.__AG_NATIVE_BRIDGE_TOKEN__ = 'tok-core-notify';
+  windowObj.Android = {
+    showAgentNotification: (tok, title, body, tag, silent) => {
+      nativeNotifications.push({ tok, title, body, tag, silent });
+      return true;
+    }
+  };
   let vhAttempts = 0;
   windowObj.fetch = async (url) => {
     if (String(url).includes('/voice/health')) {
@@ -650,6 +751,20 @@ function createMockDom() {
   const vhResp = await windowObj.fetch('/voice/health');
   assert.equal(vhResp.status, 200, '/voice/health should retry transient cold-boot failures');
   assert.equal(vhAttempts, 3);
+
+  const webNote = new windowObj.Notification('Build Ready', {
+    body: 'Completed successfully',
+    tag: 'turn_99',
+    silent: false
+  });
+  assert.equal(webNote.title, 'Build Ready');
+  assert.deepEqual(nativeNotifications, [{
+    tok: 'tok-core-notify',
+    title: 'Build Ready',
+    body: 'Completed successfully',
+    tag: 'turn_99',
+    silent: false
+  }], 'Notification polyfill should forward web notifications to Android.showAgentNotification');
 
   console.log('test bridge.core.js: OK');
 }
@@ -770,6 +885,33 @@ function createMockDom() {
   windowObj._etListeners = new Map();
   Object.setPrototypeOf(windowObj, MockEventTarget.prototype);
 
+  const addedWorklets = [];
+  class MockAudioContext {
+    constructor(opts) {
+      this.sampleRate = opts?.sampleRate || 48000;
+      this.state = 'suspended';
+      this._loadedModules = new Set();
+      this.audioWorklet = {
+        addModule: async (url) => {
+          addedWorklets.push(url);
+          this._loadedModules.add(url);
+        }
+      };
+    }
+    async resume() { this.state = 'running'; }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+  }
+  class MockAudioWorkletNode {
+    constructor(ctx, name) {
+      if (!ctx._loadedModules.size) {
+        throw new Error(`AudioWorkletNode ${name} constructed before addModule finished`);
+      }
+      this.name = name;
+    }
+  }
+  windowObj.AudioContext = MockAudioContext;
+  windowObj.AudioWorkletNode = MockAudioWorkletNode;
+
   const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'web_optimizations.js'), 'utf8');
   const ctx = vm.createContext(windowObj);
   vm.runInContext(code, ctx);
@@ -822,6 +964,14 @@ function createMockDom() {
   assert.equal(removedResizeCalls, 0, 'Removed resize listener must not fire');
   assert.equal(roActiveCalls, 1, 'Deferred ResizeObserver must flush once with latest entries');
   assert.equal(roDisconnectedCalls, 0, 'Disconnected ResizeObserver must not flush after disconnect()');
+
+  // Verify 48kHz Live Voice AudioContext loads audioWorklet synchronously when awaited
+  const voiceCtx = new winProxy.AudioContext({ sampleRate: 48000 });
+  await voiceCtx.resume();
+  await voiceCtx.audioWorklet.addModule('data:application/javascript;base64,test');
+  const node = new winProxy.AudioWorkletNode(voiceCtx, 'audio-streaming-processor');
+  assert.equal(node.name, 'audio-streaming-processor');
+  assert.equal(addedWorklets.length, 1, '48kHz audioWorklet.addModule must execute eagerly, not be stubbed');
 
   console.log('test web_optimizations.js: OK');
 }

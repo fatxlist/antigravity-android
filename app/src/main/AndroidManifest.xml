@@ -28,6 +28,12 @@
             <action android:name="android.intent.action.OPEN_DOCUMENT" />
             <data android:mimeType="*/*" />
         </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
     </queries>
 
     <uses-permission android:name="android.permission.INTERNET" />

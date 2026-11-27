@@ -19,10 +19,11 @@ import java.util.regex.Pattern;
 
 /**
  * Watches the core process stdout/stderr stream for agent lifecycle events
- * (task start/completion, cascade completion, rich tool approval requests,
- * subagent/swarm progress & cancellation, fatal errors), journals them to
- * {@code files/.gemini/events.jsonl}, and posts rate-limited native
- * notifications via {@link NotificationHandler}.
+ * (rich tool approval requests, subagent/swarm progress & cancellation, and
+ * fatal errors), journals them to {@code files/.gemini/events.jsonl}, and
+ * posts rate-limited native notifications via {@link NotificationHandler}.
+ * Conversation-level turn completions are monitored independently by
+ * {@code agy-daemon} via {@code transcript.jsonl}.
  */
 public final class CoreEventWatcher {
 
@@ -54,7 +55,6 @@ public final class CoreEventWatcher {
     private final Context appContext;
     private final NotificationHandler notificationHandler;
     private final ConcurrentHashMap<String, Long> lastNotifiedAt = new ConcurrentHashMap<>();
-    private volatile boolean sawTaskOrCascadeActive = false;
     private volatile String lastApprovalId = "";
 
     public CoreEventWatcher(Context context) {
@@ -78,7 +78,6 @@ public final class CoreEventWatcher {
             if (safeLine.isEmpty()) {
                 return;
             }
-            String lower = safeLine.toLowerCase(Locale.US);
 
             // 1. Fatal errors (highest priority)
             if (isFatalErrorLine(safeLine)) {
@@ -117,28 +116,6 @@ public final class CoreEventWatcher {
                 handleSubagentEvent(safeLine, isStart ? "start" : "progress");
                 return;
             }
-
-            // 4. Task / cascade start
-            if (safeLine.contains("[task:start]")
-                    || safeLine.contains("Starting task")
-                    || safeLine.contains("CASCADE_RUN_STATUS_RUNNING")
-                    || safeLine.contains("[cascade:start]")) {
-                sawTaskOrCascadeActive = true;
-                handleTaskStart(safeLine);
-                return;
-            }
-
-            // 5. Task / cascade completion
-            boolean explicitDone = safeLine.contains("[task:done]")
-                    || safeLine.contains("Task completed")
-                    || safeLine.contains("[cascade:done]")
-                    || lower.contains("cascade completed");
-            boolean idleAfterRun = sawTaskOrCascadeActive
-                    && safeLine.contains("CASCADE_RUN_STATUS_IDLE");
-            if (explicitDone || idleAfterRun) {
-                sawTaskOrCascadeActive = false;
-                handleTaskDone(safeLine);
-            }
         } catch (Throwable t) {
             Log.w(TAG, "event watcher line error: " + t.getMessage());
         }
@@ -161,48 +138,6 @@ public final class CoreEventWatcher {
                 || lower.contains("fatal error:")
                 || lower.contains("sigsegv")
                 || lower.contains("sigill");
-    }
-
-    private void handleTaskStart(String safeLine) {
-        JSONObject data = new JSONObject();
-        try {
-            data.put("raw", truncate(safeLine, MAX_MESSAGE_CHARS));
-        } catch (Exception ignored) {
-        }
-        appendEventLine(appContext.getFilesDir(), "agent.task.started", "language_server:stdout", data);
-
-        if (!allowNotification("task_start", DEFAULT_COOLDOWN_MS)) {
-            return;
-        }
-        String summary = stripMarker(safeLine, new String[]{
-                "[task:start]", "[cascade:start]", "Starting task:", "Starting task"
-        });
-        if (summary.isEmpty()) {
-            summary = "Agent task started";
-        }
-        postNotification("agy_event_task", 4101, NotificationHandler.CHANNEL_TASKS,
-                "Antigravity Task Started", truncate(summary, MAX_MESSAGE_CHARS), null, null);
-    }
-
-    private void handleTaskDone(String safeLine) {
-        JSONObject data = new JSONObject();
-        try {
-            data.put("raw", truncate(safeLine, MAX_MESSAGE_CHARS));
-        } catch (Exception ignored) {
-        }
-        appendEventLine(appContext.getFilesDir(), "agent.task.completed", "language_server:stdout", data);
-
-        if (!allowNotification("task_done", DEFAULT_COOLDOWN_MS)) {
-            return;
-        }
-        String summary = stripMarker(safeLine, new String[]{
-                "[task:done]", "[cascade:done]", "Task completed:", "Task completed"
-        });
-        if (summary.isEmpty() || summary.contains("CASCADE_RUN_STATUS_IDLE")) {
-            summary = "Agent finished the current task";
-        }
-        postNotification("agy_event_task", 4101, NotificationHandler.CHANNEL_ALERTS,
-                "Antigravity Task Completed", truncate(summary, MAX_MESSAGE_CHARS), null, null);
     }
 
     private void handleFatalError(String safeLine) {

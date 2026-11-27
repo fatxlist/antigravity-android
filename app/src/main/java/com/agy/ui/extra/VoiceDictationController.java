@@ -38,6 +38,8 @@ public final class VoiceDictationController {
     private SpeechRecognizer speechRecognizer;
     private boolean listening = false;
     private boolean pendingStartAfterPermission = false;
+    private boolean readyForSpeech = false;
+    private boolean fallbackAttemptedForSession = false;
 
     public VoiceDictationController(Activity activity, Listener listener) {
         this.activity = activity;
@@ -136,6 +138,8 @@ public final class VoiceDictationController {
         if (listening) {
             stop();
         }
+        readyForSpeech = false;
+        fallbackAttemptedForSession = false;
         Intent intent = buildRecognizerIntent();
         if (SpeechRecognizer.isRecognitionAvailable(activity)) {
             try {
@@ -150,6 +154,7 @@ public final class VoiceDictationController {
                 destroyRecognizerQuietly();
             }
         }
+        fallbackAttemptedForSession = true;
         return startIntentFallback(intent);
     }
 
@@ -181,6 +186,7 @@ public final class VoiceDictationController {
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
             public void onReadyForSpeech(Bundle params) {
+                readyForSpeech = true;
                 listening = true;
                 notifyState(true, null);
             }
@@ -206,6 +212,26 @@ public final class VoiceDictationController {
                 listening = false;
                 String code = mapError(error);
                 Log.w(TAG, "SpeechRecognizer error=" + error + " (" + code + ")");
+                boolean resetRecognizer = error == SpeechRecognizer.ERROR_CLIENT
+                        || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                        || error == SpeechRecognizer.ERROR_AUDIO
+                        || error == SpeechRecognizer.ERROR_SERVER;
+                if (resetRecognizer) {
+                    destroyRecognizerQuietly();
+                }
+                boolean canFallback = !readyForSpeech && !fallbackAttemptedForSession
+                        && (error == SpeechRecognizer.ERROR_CLIENT
+                        || error == SpeechRecognizer.ERROR_SERVER
+                        || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                        || (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                        && hasRecordAudioPermission()));
+                if (canFallback) {
+                    fallbackAttemptedForSession = true;
+                    destroyRecognizerQuietly();
+                    Log.i(TAG, "SpeechRecognizer failed before ready (" + code + "), launching RecognizerIntent fallback");
+                    startIntentFallback(buildRecognizerIntent());
+                    return;
+                }
                 notifyState(false, code);
             }
 

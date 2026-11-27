@@ -82,6 +82,10 @@ public final class WebViewHost {
         chromeClient.cancelPendingPermissions();
     }
 
+    public boolean hasPendingAudioPermissionRequest() {
+        return chromeClient != null && chromeClient.hasPendingAudioPermissionRequest();
+    }
+
     public WebView getWebView() {
         return webView;
     }

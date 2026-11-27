@@ -24,7 +24,7 @@ modules/runner/
 |---|---|---|---|
 | `prepare_runtime.py` | Python 3 | Распаковка pristine ядра, применение патчей, компоновка `standalone_runtime/`, сверка `manifest.json` | `modules/core`, `modules/patches` |
 | `start_core.sh` | Bash | Настройка glibc-загрузчика, Bionic-библиотек, запуск ядра и конвейера `stream_splitter.py` в фоне | `modules/io`, `libloader.so`, `liblse_compat.so` |
-| `probe_server.py` | Python 3 | Опрос локального TCP/HTTP порта до подтверждения готовности или таймаута | `urllib.request`, `socket` |
+| `probe_server.py` | Python 3 | Опрос локального TCP/HTTP порта до подтверждения готовности или таймаута | `urllib.request`, `os.kill` |
 | `stop_core.sh` | Bash | Остановка серверного процесса: чтение PID, отправка `SIGTERM`, ожидание, эскалация до `SIGKILL` | Linux `/proc`, `kill` |
 | `test_e2e.sh` | Bash | Автоматический прогон полного цикла: сборка -> запуск -> probe -> проверка логов -> остановка | Все утилиты runner |
 
@@ -103,7 +103,7 @@ stateDiagram-v2
 
 1. **Фаза сборки (Preparation):**
    - Выполняется скриптом `prepare_runtime.py`.
-   - Проверяется кэш пропатченного бинарника (`language_server_patched_aa7d4a1e`). Если кэш отсутствует, из `modules/core/pristine/language_server.tar.gz` извлекается оригинальное ядро и пропускается через `modules/patches/pipeline.py`.
+   - Проверяется кэш пропатченного бинарника (`language_server_patched_cdbad9f7`, префикс `TARGET_SHA[:8]`). Если кэш отсутствует или не проходит проверку SHA-256, из `modules/core/pristine/language_server.tar.gz` извлекается оригинальное ядро и пропускается через `modules/patches/pipeline.py`.
    - В целевой каталог (`standalone_runtime`) компонуются каталоги: `bin/` (с `liblanguage_server.so`, `libloader.so` и browser-шимами), `lib/` (glibc-библиотеки), `certs/` (`ca-certificates.crt`), `seed/` (шаблоны конфигураций).
    - Проверяется криптографический манифест `manifest.json` по алгоритму SHA-256.
 
@@ -189,7 +189,7 @@ stateDiagram-v2
 ### Проблема 5: Валидация кэша в `prepare_runtime.py` (Устранено)
 - **Файл:** `prepare_runtime.py`
 - **Было:** `TARGET_SHA` не проверялся, любой поврежденный файл с подходящим именем слепо копировался.
-- **Реализовано:** Добавлена поблочная проверка SHA-256 кэшированного бинарника ядра (`ec217e58...`). При несовпадении хэша кэш признается невалидным, и ядро заново распаковывается и патчится.
+- **Реализовано:** Добавлена поблочная проверка SHA-256 кэшированного бинарника ядра (`cdbad9f7...`, `prepare_runtime.py:TARGET_SHA`). При несовпадении хэша кэш признается невалидным, и ядро заново распаковывается и патчится.
 
 ### Проблема 6: Зависание `probe_server.py` при раннем краше сервера (Устранено)
 - **Файл:** `probe_server.py`
@@ -258,3 +258,42 @@ python3 modules/runner/probe_server.py 45159 10
 # Корректная остановка:
 bash modules/runner/stop_core.sh /data/user/0/com.agy.dev/files/standalone_runtime
 ```
+
+---
+
+## Interface
+- `[prepare_runtime.py:TARGET_SHA]`: Expected SHA-256 hex digest (`"cdbad9f7855ae6d9bb675c42aa34af82f662c5a5cab98ef0d514eb1061690cad"`) used to validate the cached patched core binary.
+- `[prepare_runtime.py:DEFAULT_DEST]`: Default standalone runtime destination path (`"/data/user/0/com.agy/files/standalone_runtime"`), plus `[prepare_runtime.py:RUNNER_DIR]` and `[prepare_runtime.py:MODULES_DIR]`.
+- `[prepare_runtime.py:prepare]`: `prepare(dest_runtime_dir: str = DEFAULT_DEST) -> bool` — extracts/patches (or reuses SHA-256-verified cached) core binary, assembles runtime assets into `dest_runtime_dir`, and verifies `manifest.json`.
+- `[prepare_runtime.py:main]`: CLI entry point accepting an optional non-`-`-prefixed destination path argument and optional `[prepare_runtime.py:AGY_CACHE_DIR]` environment variable.
+- `[probe_server.py:resolve_target_pid]`: `resolve_target_pid(pid_arg: Optional[Union[str, int]] = None) -> Optional[int]` — resolves target PID from argument (int, digit string, or PID file path), env vars (`[probe_server.py:STANDALONE_PID]`, `[probe_server.py:AGY_PID]`), or candidate `standalone.pid` files (`[probe_server.py:RT]`, `[probe_server.py:HOME]`).
+- `[probe_server.py:is_process_alive]`: `is_process_alive(pid: int) -> bool` — checks process liveness via `os.kill(pid, 0)`.
+- `[probe_server.py:probe]`: `probe(port: int = 45159, timeout_sec: int = 20, pid: Optional[Union[str, int]] = None) -> bool` — polls `http://127.0.0.1:<port>` with fail-fast PID monitoring.
+- `[probe_server.py:main]`: CLI entry point accepting positional args `[port=45159] [timeout=20] [pid=None]`.
+- `[start_core.sh:RT]`: CLI entry script accepting positional args `$1` (`[start_core.sh:RT]`, default `$HOME/standalone_runtime`) and `$2` (`[start_core.sh:PORT]`, default `45159`), consuming `[start_core.sh:AGY_APPLICATION_ID]`, `[start_core.sh:HOME]`, `[start_core.sh:TMPDIR]`, and `[start_core.sh:PREFIX]`, defining helper `[start_core.sh:is_port_in_use]`, and launching `[start_core.sh:CMD]` (`[start_core.sh:LOADER]` with `[start_core.sh:--library-path]`, optional `[start_core.sh:--preload]` `[start_core.sh:LSE_COMPAT]`, and `[start_core.sh:CORE]` with `[start_core.sh:--standalone]`, `[start_core.sh:--override_ide_name]`, `[start_core.sh:--subclient_type]`, `[start_core.sh:--override_ide_version]`, `[start_core.sh:--override_user_agent_name]`, `[start_core.sh:--https_server_port]`, `[start_core.sh:--csrf_token]` `[start_core.sh:CSRF_TOKEN]`, `[start_core.sh:--app_data_dir]`, `[start_core.sh:--enable_sidecars]`).
+- `[stop_core.sh:RT]`: CLI entry script accepting positional arg `$1` (`[stop_core.sh:RT]`, default `/data/user/0/$APP_ID/files/standalone_runtime`), consuming `[stop_core.sh:AGY_APPLICATION_ID]` and `[stop_core.sh:HOME]`, and defining `[stop_core.sh:cleanup_stale_files]`.
+
+## Invariants
+- `[prepare_runtime.py:prepare]`: Reuses `<cache_dir>/language_server_patched_<TARGET_SHA[:8]>` only when its full SHA-256 matches `[prepare_runtime.py:TARGET_SHA]`; otherwise extracts `modules/core/pristine/language_server.tar.gz` and runs `pipeline.run_pipeline(staged_bin, dry_run=False, verify=False, allow_missing=False)`.
+- `[prepare_runtime.py:prepare]`: Enforces patch pipeline success and byte-for-byte `manifest.json` verification via `assert`, and always removes the temporary `agy_staging_*` directory in a `finally` block.
+- `[probe_server.py:resolve_target_pid]`: Follows strict PID precedence: `pid_arg` -> `STANDALONE_PID` -> `AGY_PID` -> `$RT/standalone.pid` -> `$HOME/standalone_runtime/standalone.pid` -> `/data/user/0/com.agy.dev/files/standalone_runtime/standalone.pid` -> `/data/user/0/com.agy/files/standalone_runtime/standalone.pid` -> `standalone.pid`.
+- `[probe_server.py:probe]`: Polls only `http://127.0.0.1:<port>` (`User-Agent: AntigravityProbe/1.0`, `1.5s` request timeout, `0.2s` retry sleep), treats any HTTP response including `urllib.error.HTTPError` as ready (`True`), and aborts immediately (`False`) if `[probe_server.py:is_process_alive]` returns `False` (`PermissionError` counts as alive; `ProcessLookupError`/`OSError` as dead).
+- `[start_core.sh:PORT]`: Runs under `set -euo pipefail`, rejects reserved primary ports `45157` and `45158` (exit `1`), requires both `[start_core.sh:LOADER]` and `[start_core.sh:CORE]` to exist, and requires an occupied target port to clear within `2.0s` (`20 x 0.1s`, `[start_core.sh:PORT_FREED]`) or aborts (exit `1`).
+- `[start_core.sh:APP_ID]`: Resolves `APP_ID` in order `AGY_APPLICATION_ID` -> `/data/user/0/([^/]+)` regex on `HOME` -> `com.agy.dev` (if directory exists) -> `com.agy` (identical logic in `[stop_core.sh:APP_ID]`).
+- `[start_core.sh:orphan_pid]`: Orphan cleanup over `/proc/[0-9]*/cmdline` strictly requires all three substrings `"language_server"`, `"antigravity-app-standalone"`, and `"$PORT"` to avoid affecting the primary IDE server.
+- `[start_core.sh:LD_PRELOAD]`: Unsets host `LD_PRELOAD` before launch and enables job control (`set -m`) so the core process runs in its own process group (`[start_core.sh:CORE_PGID]`).
+- `[stop_core.sh:IS_LANGUAGE_SERVER]`: Runs under `set -euo pipefail` and checks `/proc/$PID/cmdline` contains `"language_server"` before sending signals; on mismatch, aborts without killing (exit `0`) and removes stale PID/FIFO/metadata files to prevent PID recycling hazards.
+- `[stop_core.sh:TERMINATED]`: Sends `SIGTERM` to `-$PGID` (only if `PGID` is non-empty and `> 1`, falling back to field 5 of `/proc/$PID/stat`), `$PID`, and `$SPLITTER_PID`, polls `kill -0` every `0.1s` up to `5.0s` (50 iterations), escalates to `SIGKILL` and polls up to `1.0s` (10 iterations), and exits `1` only if `$PID` survives `SIGKILL`.
+
+## Side Effects
+- `[prepare_runtime.py:sys.path]`: Prepends `modules/core/unpack`, `modules/core/bundle`, `modules/core/manifest`, and `modules/patches` to `sys.path` at import time.
+- `[prepare_runtime.py:prepare]`: Creates cache and staging directories, extracts and patches the binary, writes the cached binary into `cache_dir`, recursively deletes any existing `dest_runtime_dir` (`shutil.rmtree`), writes assembled runtime assets to `dest_runtime_dir`, deletes the staging directory, and prints to `stdout` (`[prepare_runtime.py:main]` calls `sys.exit`).
+- `[probe_server.py:probe]`: Reads candidate PID files (`[probe_server.py:resolve_target_pid]`), probes process liveness via `os.kill(pid, 0)` (`[probe_server.py:is_process_alive]`), sends loopback HTTP GET requests to `127.0.0.1:<port>`, writes to `stdout`/`stderr`, and exits via `sys.exit` in `[probe_server.py:main]`.
+- `[start_core.sh:PORT]`: When the target port is occupied, invokes `bash "$RUNNER_DIR/stop_core.sh" "$RT"` (if `[start_core.sh:PID_FILE]` exists) and sends `SIGTERM`/`SIGKILL` to matching orphaned processes (`[start_core.sh:orphan_pid]`).
+- `[start_core.sh:HOME]`: Exports `HOME`, `TMPDIR`, `SSL_CERT_FILE`, `PATH`, `SHELL`, `LANG`, `LC_ALL`, `GODEBUG`, `ANTIGRAVITY_VSCODE_HOST`, `BROWSER`, and `LD_LIBRARY_PATH`, and unsets `[start_core.sh:LD_PRELOAD]`.
+- `[start_core.sh:FIFO_FILE]`: Recreates named FIFO `$RT/core_stream.fifo`, spawns background `python3 -u $MODULES_DIR/io/interceptors/stream_splitter.py` (`[start_core.sh:SPLITTER_PID]`) writing `[start_core.sh:LOG_FILE]` (`$RT/core_output.log`), spawns background core server (`[start_core.sh:CORE_PID]`), and writes `[start_core.sh:PID_FILE]` (`standalone.pid`), `[start_core.sh:SPLITTER_PID_FILE]` (`standalone.splitter_pid`), `[start_core.sh:PGID_FILE]` (`standalone.pgid`), and `[start_core.sh:META_FILE]` (`standalone.json`).
+- `[stop_core.sh:PID]`: Sends `SIGTERM` and (on timeout) `SIGKILL` to `$PID`, process group `-$PGID` (`[stop_core.sh:PGID]`), and `[stop_core.sh:SPLITTER_PID]`.
+- `[stop_core.sh:cleanup_stale_files]`: Deletes `$RT/standalone.pid`, `$RT/standalone.splitter_pid`, `$RT/standalone.pgid`, `$RT/standalone.json`, and `$RT/core_stream.fifo` (preserving `core_output.log`) and writes status/warnings to `stdout`/`stderr`.
+
+## Verification
+- Run: `bash modules/runner/test_e2e.sh`

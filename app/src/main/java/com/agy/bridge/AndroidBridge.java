@@ -1,9 +1,13 @@
 package com.agy.bridge;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.webkit.JavascriptInterface;
 
 import com.agy.core.VoiceForegroundService;
+import com.agy.gateway.handlers.NotificationHandler;
 import com.agy.runtime.RuntimeManager;
 import com.agy.shell.ShizukuBridge;
 import com.agy.theme.ThemeManager;
@@ -11,6 +15,8 @@ import com.agy.ui.MainActivity;
 import com.agy.ui.extra.ClipboardImageReader;
 import com.agy.ui.extra.ExtraKeysBarView;
 import com.agy.ui.extra.LocalPreviewDialog;
+
+import org.json.JSONObject;
 
 import java.lang.ref.WeakReference;
 import java.nio.charset.Charset;
@@ -32,6 +38,10 @@ public final class AndroidBridge {
     private final EngineBridge engine;
     private final EngineConfigJson config;
     private final String blobBridgeToken = createBlobBridgeToken();
+    private final Object notifyLock = new Object();
+    private volatile NotificationHandler notificationHandler;
+    private long lastWebNotifyAtMs = 0L;
+    private String lastWebNotifyKey = "";
     private volatile WeakReference<MainActivity> activityRef;
 
     public AndroidBridge(Context context, RuntimeManager runtime,
@@ -279,6 +289,91 @@ public final class AndroidBridge {
     @JavascriptInterface
     public boolean isVoiceMuted() {
         return VoiceForegroundService.isMuted();
+    }
+
+    /** Reports host runtime RECORD_AUDIO permission state as "granted" or "prompt" for WebView pre-checks. */
+    @JavascriptInterface
+    public String getMicrophonePermissionState() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED ? "granted" : "prompt";
+        }
+        return "granted";
+    }
+
+    /** Posts an agent status/completion notification from the trusted top-level web UI. */
+    @JavascriptInterface
+    public boolean showAgentNotification(String token, String title, String body, String tag, boolean silent) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        String cleanTitle = title != null ? title.trim() : "";
+        if (cleanTitle.isEmpty()) {
+            cleanTitle = "Antigravity";
+        } else if (cleanTitle.length() > 120) {
+            cleanTitle = cleanTitle.substring(0, 120);
+        }
+        String cleanBody = body != null ? body.trim() : "";
+        if (cleanBody.length() > 400) {
+            cleanBody = cleanBody.substring(0, 400);
+        }
+        String safeTag = sanitizeWebNotifyTag(tag);
+        String dedupeKey = cleanTitle + "\n" + cleanBody;
+        long now = System.currentTimeMillis();
+        synchronized (notifyLock) {
+            if (dedupeKey.equals(lastWebNotifyKey) && (now - lastWebNotifyAtMs) < 2000L) {
+                return true;
+            }
+            lastWebNotifyKey = dedupeKey;
+            lastWebNotifyAtMs = now;
+        }
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("action", "post");
+            payload.put("tag", safeTag);
+            payload.put("title", cleanTitle);
+            payload.put("message", cleanBody);
+            payload.put("channel", silent
+                    ? NotificationHandler.CHANNEL_SUBAGENTS
+                    : NotificationHandler.CHANNEL_ALERTS);
+            payload.put("only_alert_once", silent);
+            JSONObject resp = getNotificationHandler().handle(payload);
+            return resp != null && resp.optBoolean("ok", false);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private NotificationHandler getNotificationHandler() {
+        NotificationHandler handler = notificationHandler;
+        if (handler == null) {
+            synchronized (notifyLock) {
+                handler = notificationHandler;
+                if (handler == null) {
+                    handler = new NotificationHandler(appContext);
+                    notificationHandler = handler;
+                }
+            }
+        }
+        return handler;
+    }
+
+    private static String sanitizeWebNotifyTag(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "agy_web_agent";
+        }
+        StringBuilder sb = new StringBuilder("agy_web_");
+        String trimmed = raw.trim();
+        for (int i = 0; i < trimmed.length() && sb.length() < 48; i++) {
+            char c = trimmed.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+                sb.append(c);
+            } else {
+                sb.append('_');
+            }
+        }
+        return sb.length() > "agy_web_".length() ? sb.toString() : "agy_web_agent";
     }
 
     @JavascriptInterface

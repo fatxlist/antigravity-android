@@ -80,6 +80,9 @@ function ensureBridgeStyles() {
     '.ag-mb-btn[data-active="true"] { background: #ef4444; color: #ffffff; }',
     '.ag-mb-voice-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }',
     '.ag-mb-voice-status { font-size: 12px; opacity: 0.74; }',
+    '#ag-mb-voice-level { width: 100%; height: 4px; border-radius: 999px; background: rgba(148,163,184,0.22); overflow: hidden; display: none; }',
+    '#ag-mb-voice-level-fill { width: 0%; height: 100%; background: #38bdf8; transition: width 0.14s linear; }',
+    '#ag-mb-voice-diag { font-size: 11px; color: #f87171; display: none; }',
     '#ag-mb-voice-interim { font-size: 12px; opacity: 0.85; font-style: italic; display: none; }',
     '#ag-mb-voice-interim.ag-mb-visible { display: block; }',
     '#ag-mb-drawer-share { width: 100%; display: none; }',
@@ -193,9 +196,31 @@ function syncDrawerState() {
   var voiceStatus = doc.getElementById('ag-mb-voice-status');
   var voiceActive = state.voiceServiceActive;
   if (voiceStatus) {
-    voiceStatus.textContent = voiceActive
-      ? ('Voice service: ' + (state.voiceServiceMuted ? 'Active (Muted)' : 'Active'))
-      : 'Voice service: Idle';
+    if (voiceActive) {
+      voiceStatus.textContent = 'Voice service: ' + (state.voiceServiceMuted ? 'Active (Muted)' : 'Active');
+    } else if (state.voiceWsState === 'connecting') {
+      voiceStatus.textContent = 'Voice service: Connecting\u2026';
+    } else if (state.voiceWsState === 'error') {
+      voiceStatus.textContent = 'Voice service: Error';
+    } else {
+      voiceStatus.textContent = 'Voice service: Idle';
+    }
+  }
+  var levelWrap = doc.getElementById('ag-mb-voice-level');
+  var levelFill = doc.getElementById('ag-mb-voice-level-fill');
+  if (levelWrap && levelFill) {
+    levelWrap.style.display = (voiceActive || state.voiceMicLevel > 0) ? 'block' : 'none';
+    levelFill.style.width = Math.max(0, Math.min(100, state.voiceMicLevel || 0)) + '%';
+  }
+  var voiceDiag = doc.getElementById('ag-mb-voice-diag');
+  if (voiceDiag) {
+    if (state.voiceLastError) {
+      voiceDiag.textContent = state.voiceLastError;
+      voiceDiag.style.display = 'block';
+    } else {
+      voiceDiag.textContent = '';
+      voiceDiag.style.display = 'none';
+    }
   }
   var muteBtn = doc.getElementById('ag-mb-voice-mute');
   if (muteBtn) {
@@ -417,6 +442,15 @@ function buildAndroidToolsCard(onActionDone) {
   voiceStatus.className = 'ag-mb-voice-status';
   voiceStatus.textContent = 'Voice service: Idle';
 
+  var levelWrap = doc.createElement('div');
+  levelWrap.id = 'ag-mb-voice-level';
+  var levelFill = doc.createElement('div');
+  levelFill.id = 'ag-mb-voice-level-fill';
+  levelWrap.appendChild(levelFill);
+
+  var voiceDiag = doc.createElement('div');
+  voiceDiag.id = 'ag-mb-voice-diag';
+
   voiceBtns.appendChild(dictateBtn);
   voiceBtns.appendChild(muteBtn);
   voiceBtns.appendChild(stopSvcBtn);
@@ -424,6 +458,8 @@ function buildAndroidToolsCard(onActionDone) {
   voiceRowWrap.appendChild(voiceBtns);
   voiceRowWrap.appendChild(interimEl);
   voiceRowWrap.appendChild(voiceStatus);
+  voiceRowWrap.appendChild(levelWrap);
+  voiceRowWrap.appendChild(voiceDiag);
   card.appendChild(voiceRowWrap);
 
   // Clipboard Image Paste

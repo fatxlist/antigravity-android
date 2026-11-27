@@ -26,7 +26,7 @@ modules/core/
 │   ├── glibc_deps.list         # Список требуемых glibc .so библиотек
 │   └── shims.list              # Список устанавливаемых исполняемых шимов
 ├── pristine/                   # Оригинальный неизмененный архив ядра
-│   └── language_server.tar.gz  # Pristine aarch64 language_server (~181 MB unpacked)
+│   └── language_server.tar.gz  # Pristine aarch64 language_server (~205 MB unpacked, 215438000 bytes)
 ├── unpack/                     # Модули распаковки и прав доступа
 │   ├── archive_detector.py     # Определение формата (tar_gz, elf, unknown)
 │   ├── extractor.py            # Извлечение core-бинарника из tar.gz / raw ELF
@@ -55,9 +55,10 @@ modules/core/
 │   └── etc/                    # Конфигурационные файлы (hosts, nsswitch, resolv)
 ├── certs/                      # Сертификаты безопасности
 │   └── ca-certificates.crt     # Системное SSL-хранилище CA
-├── seed/                       # Начальное состояние и инструкции
+├── seed/                       # Начальное состояние, инструкции и встроенные скиллы
 │   ├── AGENTS.md               # Системный промпт и правила окружения
-│   └── *.pbtxt                 # Начальные protobuf-состояния онбординга
+│   ├── *.pbtxt                 # Начальные protobuf-состояния онбординга (`antigravity_state.pbtxt`, `antigravity_state.gemini.pbtxt`, `jetski_state.pbtxt`)
+│   └── skills/                 # Встроенные Android-скиллы (`android-browser`, `android-daemon`, `android-device`)
 ├── shims/                      # Системные и браузерные заглушки
 │   ├── browser/                # xdg-open и браузерные делегаторы (chrome, open, etc.)
 │   ├── privilege/              # rish.sh (интерфейс к Shizuku ADB-оболочке)
@@ -126,7 +127,7 @@ modules/core/
   - Оркестратор сборки рантайма:
     1. Инициализирует каталоги (`layout.py`), включая `bin`, `lib`, `certs`, `seed`, `etc`.
     2. Копирует ядро как `bin/liblanguage_server.so`, загрузчик как `bin/libloader.so` и `bin/ld-linux-aarch64.so.1`, шимы (`pack_binaries.py`). Браузерные утилиты связываются симлинками или компактными ссылками на `xdg-open`.
-    3. Копирует shared libraries в `lib/`, а также сетевые и DNS-конфигурации (`hosts`, `resolv.conf`, `nsswitch.conf`) из `glibc/etc` в `etc/` (`pack_libraries.py`), избегая дублирования копирования загрузчика.
+    3. Копирует все top-level `.so`-библиотеки из `glibc/` (включая `ld-linux-aarch64.so.1`) в `lib/`, а также сетевые и DNS-конфигурации (`hosts`, `resolv.conf`, `nsswitch.conf`) из `glibc/etc` в `etc/` (`pack_libraries.py`).
     4. Копирует сертификаты в `certs/` (`pack_certs.py`).
     5. Копирует seed-файлы в `seed/` (`pack_seed.py`).
     6. Формирует `manifest.json` (`manifest_builder.py`).
@@ -135,6 +136,7 @@ modules/core/
     python3 modules/core/bundle/assemble.py \
       --core-bin /path/to/language_server \
       --out-dir /path/to/destination/runtime \
+      [--module-root /path/to/modules/core] \
       [--dry-run]
     ```
 
@@ -147,13 +149,13 @@ modules/core/
 | Каталог | Содержимое | Назначение |
 | :--- | :--- | :--- |
 | `bin/` | `liblanguage_server.so`, `libloader.so`, `ld-linux-aarch64.so.1`, `xdg-open`, `chrome`, `rish`... | Исполняемые бинарники, загрузчик glibc и shell-шимы |
-
-> Для изоляции тестов шима `xdg-open` переменная окружения `AGY_SHIM_NO_AM=1` отключает fallback-вызовы `/system/bin/am`.
-| `lib/` | `libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `liblse_compat.so`, `ld-linux-aarch64.so.1` | Зависимости glibc и LSE-атомиков под AArch64 |
+| `lib/` | `libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `liblse_compat.so`, `ld-linux-aarch64.so.1`, ... | Зависимости glibc и LSE-атомиков под AArch64 |
 | `etc/` | `hosts`, `resolv.conf`, `nsswitch.conf` | Сетевые и DNS-конфигурации для работы сетевого стека glibc |
 | `certs/` | `ca-certificates.crt` | Корневые SSL/TLS сертификаты для Go TLS рантайма |
-| `seed/` | `AGENTS.md`, `antigravity_state.pbtxt`, `jetski_state.pbtxt` | Пресеты онбординга, конфигурации агента и системные правила |
+| `seed/` | `AGENTS.md`, `antigravity_state.pbtxt`, `antigravity_state.gemini.pbtxt`, `jetski_state.pbtxt`, `skills/` | Пресеты онбординга, конфигурации агента, скиллы и системные правила |
 | `/` | `manifest.json` | Криптографический реестр целостности файлов |
+
+> Для изоляции тестов шима `xdg-open` переменная окружения `AGY_SHIM_NO_AM=1` отключает fallback-вызовы `/system/bin/am`.
 
 ---
 
@@ -176,3 +178,31 @@ bash modules/core/tests/run_all.sh
 python3 modules/core/validate/verify_pipeline.py
 ```
 Выполняет 5-шаговую сквозную валидацию в изолированной песочнице: сверка хэша pristine-архива -> извлечение -> валидация ELF/ABI -> сборка тестового runtime -> проверка сгенерированного манифеста.
+
+---
+
+## Subdirectories & Boundaries
+- Bundle: [bundle/README.md](./bundle/README.md) - Stages `bin/`, `lib/`, `certs/`, `seed/`, and `etc/` into a runtime bundle and writes `manifest.json`.
+- Manifest: [manifest/README.md](./manifest/README.md) - Streaming 1 MiB SHA-256 hashing, schema-v1 `manifest.json` generation, and directory integrity verification.
+- Shims: [shims/README.md](./shims/README.md) - Android POSIX shell shims for URL/browser openers (`browser/`, `system/`) and Shizuku `rish` (`privilege/`).
+- Unpack: [unpack/README.md](./unpack/README.md) - Magic-byte archive/ELF detection, `language_server` extraction, and additive POSIX mode helpers.
+- Validate: [validate/README.md](./validate/README.md) - SHA-256 verification, 64-bit little-endian AArch64 ELF validators, and the 5-step E2E `verify_pipeline.py`.
+- Seed Skills (non-code assets): [android-browser/SKILL.md](./seed/skills/android-browser/SKILL.md), [android-daemon/SKILL.md](./seed/skills/android-daemon/SKILL.md), [android-device/SKILL.md](./seed/skills/android-device/SKILL.md) - Bundled Android skill definitions copied verbatim into `seed/skills/` by `pack_seed.py`.
+
+## Invariants
+- `[unpack/extractor.py:extract_core]` / `[unpack/archive_detector.py:detect_type]`: Only gzip tar archives (`b"\x1f\x8b"`) containing a matching basename member (default `"language_server"`) and raw ELF binaries (`b"\x7fELF"`) are accepted; extracted outputs must be non-empty regular files.
+- `[validate/elf_header.py:validate_elf_header]` / `[validate/elf_arch.py:validate_aarch64]` / `[validate/elf_compat.py:validate_executable_type]`: Core binaries must be 64-bit (`EI_CLASS == 2`), little-endian (`EI_DATA == 1`), AArch64 (`EM_AARCH64 == 183`), and `ET_EXEC` (`2`) or `ET_DYN` (`3`), raising `ValueError` on violation.
+- `[validate/verify_pipeline.py:run_pipeline]` / `[spec/checksums.json:archive]`: E2E verification pins `pristine/language_server.tar.gz` to SHA-256 `6847c8e03731e801465a253cbb8c286ffa63c9ee4567dd7a8d5f26ccadaba390` and validates both extracted `language_server` and `glibc/ld-linux-aarch64.so.1`.
+- `[bundle/layout.py:SUBDIRS]` / `[bundle/assemble.py:assemble_runtime]`: Runtime bundle layout is fixed to `("bin", "lib", "certs", "seed", "etc")` plus root `manifest.json`; `pack_binaries.py` installs the loader as both `bin/libloader.so` and `bin/ld-linux-aarch64.so.1`, normalizes copied shell scripts to LF, and preserves symlinks/delegators to `xdg-open`.
+- `[manifest/manifest_builder.py:build_manifest]` / `[manifest/manifest_verifier.py:verify_manifest]`: Manifest schema is `1` with UTC `generated_at` and POSIX `/` relative paths excluding only root `manifest.json`; verification checks all listed files without short-circuiting and does not flag unlisted extra files.
+- `[shims/system/xdg_open.sh:LD_PRELOAD]` / `[shims/privilege/rish.sh:env]`: All shell shims strip `LD_PRELOAD` and `LD_LIBRARY_PATH` before invoking Android `/system/bin/am` or `/system/bin/app_process`; `AGY_SHIM_NO_AM` disables `/system/bin/am` dispatch for testing.
+
+## Side Effects
+- `[unpack/extractor.py:extract_core]` / `[unpack/permissions.py:make_executable]`: Creates destination directories, extracts/copies binaries to disk, and mutates POSIX permission bits via `os.chmod`.
+- `[bundle/assemble.py:assemble_runtime]` / `[manifest/manifest_builder.py:build_manifest]`: Creates the bundle tree under `out_dir`, copies/normalizes binaries, libraries, configs, certs, and seed files, creates symlinks in `bin/`, and writes `<out_dir>/manifest.json`.
+- `[validate/verify_pipeline.py:run_pipeline]`: Mutates `sys.path` at import time and creates/cleans a temporary sandbox (`tempfile.mkdtemp(prefix="agy_core_val_")`) for E2E extraction and assembly.
+- `[shims/system/xdg_open.sh:com.agy.ACTION_OPEN_URL]` / `[shims/privilege/rish.sh:exec]`: At Android runtime, shims emit stdout URL markers, dispatch `/system/bin/am` broadcasts/intents, apply `chmod 400` to `rish_shizuku.dex` on Android 14+, and `exec` `/system/bin/app_process`.
+
+## Verification
+- Run: `bash modules/core/tests/run_all.sh`
+- Run: `python3 modules/core/validate/verify_pipeline.py`

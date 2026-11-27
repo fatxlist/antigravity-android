@@ -169,6 +169,10 @@ public final class AgyWebChromeClient extends WebChromeClient {
         }
     }
 
+    public boolean hasPendingAudioPermissionRequest() {
+        return pendingAudioPermissionRequest != null;
+    }
+
     private boolean hasRecordAudioPermission() {
         if (context == null) {
             return false;

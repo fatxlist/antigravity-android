@@ -4,11 +4,12 @@ set -e
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 PREFIX="${PREFIX:-$(cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+HOME="${HOME:-$(dirname "$PREFIX")}"
 RISH_BIN="$PREFIX/bin/rish"
 
 USAGE="Usage: agy-notify [post|cancel|list] [options]
 Commands:
-  post    -t <title> [-s <subtitle>] [-m <message>] [--tag <tag>]
+  post    -t <title> [-s <subtitle>] [-m <message>] [--tag <tag>] [-c|--channel <channel>] [--cascade-id <id>]
   cancel  <tag>
   list    Show active notifications
 "
@@ -20,6 +21,8 @@ TITLE="Antigravity"
 SUBTITLE=""
 MESSAGE=""
 TAG="agy_$(date +%s)"
+CHANNEL=""
+CASCADE_ID=""
 
 if [ "$CMD" = "cancel" ]; then
     if [ "$#" -ne 1 ] || [ -z "$1" ]; then
@@ -53,6 +56,16 @@ while [[ $# -gt 0 ]]; do
             TAG="$2"
             shift 2
             ;;
+        -c|--channel)
+            [ "$#" -ge 2 ] || { echo "agy-notify: missing value for $1" >&2; exit 2; }
+            CHANNEL="$2"
+            shift 2
+            ;;
+        --cascade-id)
+            [ "$#" -ge 2 ] || { echo "agy-notify: missing value for $1" >&2; exit 2; }
+            CASCADE_ID="$2"
+            shift 2
+            ;;
         *)
             if [ -z "$MESSAGE" ]; then
                 MESSAGE="$1"
@@ -75,28 +88,76 @@ gateway_notify() {
     local title="$2"
     local message="$3"
     local tag="$4"
-    local port="${AGY_GATEWAY_PORT:-45159}"
+    local channel="${5:-}"
+    local cascade_id="${6:-}"
     local token_file="${AGY_GATEWAY_TOKEN_FILE:-$HOME/logs/gateway.token}"
-    if [ -z "$PYTHON_BIN" ] || [ ! -r "$token_file" ]; then
+    if [ -z "$PYTHON_BIN" ]; then
         return 1
     fi
+    if [ -z "${AGY_GATEWAY_TOKEN:-}" ] && [ ! -r "$token_file" ]; then
+        return 1
+    fi
+    HOME="$HOME" \
+    PREFIX="$PREFIX" \
     AGY_NOTIFY_ACTION="$action" \
     AGY_NOTIFY_TITLE="$title" \
     AGY_NOTIFY_MESSAGE="$message" \
     AGY_NOTIFY_TAG="$tag" \
-    AGY_NOTIFY_PORT="$port" \
-    AGY_NOTIFY_TOKEN_FILE="$token_file" \
+    AGY_NOTIFY_CHANNEL="$channel" \
+    AGY_NOTIFY_CASCADE_ID="$cascade_id" \
+    AGY_GATEWAY_TOKEN_FILE="$token_file" \
     "$PYTHON_BIN" -B - << 'PYEOF' 2>/dev/null
 import json, os, urllib.request, zlib
 
-token_file = os.environ["AGY_NOTIFY_TOKEN_FILE"]
-with open(token_file, "r", encoding="utf-8") as f:
-    token = f.read().strip()
+def read_gateway_token(token_file):
+    tok = (os.environ.get("AGY_GATEWAY_TOKEN") or "").strip()
+    if tok:
+        return tok
+    try:
+        with open(token_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def resolve_gateway_port(home_dir):
+    env_port = (os.environ.get("AGY_GATEWAY_PORT") or "").strip()
+    if env_port.isdigit():
+        return int(env_port)
+    port_file = os.path.join(home_dir, "logs", "gateway.port")
+    try:
+        with open(port_file, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        if raw.isdigit():
+            return int(raw)
+    except OSError:
+        pass
+    state_file = os.path.join(home_dir, "logs", "core.state.json")
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        gp = state.get("gateway_port")
+        if isinstance(gp, int) and gp > 0:
+            return gp
+        if isinstance(gp, str) and gp.isdigit():
+            return int(gp)
+    except Exception:
+        pass
+    app_id = (os.environ.get("AGY_APPLICATION_ID") or os.environ.get("RISH_APPLICATION_ID") or "").strip()
+    if not app_id and home_dir:
+        norm = os.path.normpath(home_dir)
+        if os.path.basename(norm) == "files":
+            app_id = os.path.basename(os.path.dirname(norm))
+    return 45161 if app_id.endswith(".dev") else 45160
+
+home_dir = os.environ.get("HOME") or os.path.dirname(os.environ.get("PREFIX", ""))
+token = read_gateway_token(os.environ["AGY_GATEWAY_TOKEN_FILE"])
 if not token:
     raise SystemExit(1)
 
 action = os.environ["AGY_NOTIFY_ACTION"]
 tag = os.environ["AGY_NOTIFY_TAG"]
+channel = (os.environ.get("AGY_NOTIFY_CHANNEL") or "").strip()
+cascade_id = (os.environ.get("AGY_NOTIFY_CASCADE_ID") or "").strip()
 stable_id = (zlib.crc32(tag.encode("utf-8")) & 0x7fffffff) or 1
 payload = {
     "action": action,
@@ -105,10 +166,19 @@ payload = {
     "title": os.environ["AGY_NOTIFY_TITLE"],
     "message": os.environ["AGY_NOTIFY_MESSAGE"],
 }
-port = os.environ.get("AGY_NOTIFY_PORT", "45159")
+if channel:
+    payload["channel"] = channel
+if cascade_id:
+    payload["cascade_id"] = cascade_id
+
+envelope = {
+    "command": "notify",
+    "payload": payload,
+}
+port = resolve_gateway_port(home_dir)
 req = urllib.request.Request(
-    f"http://127.0.0.1:{port}/gateway/notify",
-    data=json.dumps(payload).encode("utf-8"),
+    f"http://127.0.0.1:{port}/gateway",
+    data=json.dumps(envelope).encode("utf-8"),
     headers={
         "Content-Type": "application/json",
         "X-Agy-Gateway-Token": token,
@@ -116,6 +186,8 @@ req = urllib.request.Request(
     method="POST",
 )
 with urllib.request.urlopen(req, timeout=3) as resp:
+    if getattr(resp, "status", 200) != 200:
+        raise SystemExit(1)
     data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
     if not data.get("ok"):
         raise SystemExit(1)
@@ -133,7 +205,7 @@ if [ "$CMD" = "post" ]; then
         BODY_TEXT="[$SUBTITLE] $MESSAGE"
     fi
 
-    if gateway_notify "post" "$TITLE" "$BODY_TEXT" "$TAG"; then
+    if gateway_notify "post" "$TITLE" "$BODY_TEXT" "$TAG" "$CHANNEL" "$CASCADE_ID"; then
         exit 0
     fi
 

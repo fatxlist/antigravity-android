@@ -117,10 +117,16 @@ for tool in python3 aapt javac java apksigner; do
     fi
 done
 
-# Clean previous build artifacts
-echo "[*] Cleaning build directories..."
-rm -rf "$BUILD_DIR/gen" "$BUILD_DIR/res" "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/staging" \
-       "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.apk"
+# Clean previous build artifacts (preserve cached runtime/env assets under --fast)
+if [ "$FAST_BUILD" = "1" ]; then
+    echo "[*] Cleaning build outputs (--fast preserves staged runtime/env caches)..."
+    rm -rf "$BUILD_DIR/gen" "$BUILD_DIR/res" "$BUILD_DIR/obj" "$BUILD_DIR/dex" \
+           "$BUILD_DIR/staging/assets/web" "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.apk"
+else
+    echo "[*] Cleaning build directories..."
+    rm -rf "$BUILD_DIR/gen" "$BUILD_DIR/res" "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/staging" \
+           "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.apk"
+fi
 mkdir -p "$BUILD_DIR/gen" "$BUILD_DIR/res" "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/staging" "$DIST_DIR"
 
 # Phase 01: Config Generation (creates BuildConfig.java, gen.xml, and build/AndroidManifest.xml)
@@ -145,13 +151,16 @@ bash "$SCRIPT_DIR/04_dex.sh" "$BUILD_DIR/dex" "$BUILD_DIR/obj" "$TOOLS_DIR/r8.ja
 echo -e "\n>>> [5/8] Staging Runtime and Web Assets..."
 python3 "$SCRIPT_DIR/05_stage_assets.py" "$BUILD_DIR/staging"
 
-# Phase 06: Package Unaligned APK
-echo -e "\n>>> [6/8] Packaging Unaligned APK..."
-bash "$SCRIPT_DIR/06_package.sh" "$BUILD_DIR/unaligned.apk" "$TARGET_MANIFEST" "$APP_DIR/src/main/res" "$TOOLS_DIR/android.jar" "$BUILD_DIR/staging/assets" "$BUILD_DIR/dex/classes.dex" "$BUILD_DIR/res"
+# Phase 06: Single-Pass Package & ZipAlign
+echo -e "\n>>> [6/8] Packaging and ZipAligning APK..."
+bash "$SCRIPT_DIR/06_package.sh" "$BUILD_DIR/aligned.apk" "$TARGET_MANIFEST" "$APP_DIR/src/main/res" "$TOOLS_DIR/android.jar" "$BUILD_DIR/staging/assets" "$BUILD_DIR/dex/classes.dex" "$BUILD_DIR/res"
 
-# Phase 07: ZipAlign
-echo -e "\n>>> [7/8] ZipAligning APK..."
-python3 "$SCRIPT_DIR/align.py" "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.apk" 4
+# Phase 07: Verify ZipAlign
+echo -e "\n>>> [7/8] Verifying ZipAlign..."
+if ! python3 -B "$SCRIPT_DIR/align.py" --check "$BUILD_DIR/aligned.apk" 4; then
+    python3 "$SCRIPT_DIR/align.py" "$BUILD_DIR/aligned.apk" "$BUILD_DIR/unaligned.apk" 4
+    mv -f "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/aligned.apk"
+fi
 
 # Phase 08: Sign and Verify APK
 echo -e "\n>>> [8/8] Signing and Verifying APK..."

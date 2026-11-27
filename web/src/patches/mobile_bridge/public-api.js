@@ -26,6 +26,30 @@ function onExtraKeysVisibilityChanged(visible) {
   syncDrawerState();
 }
 
+function openConversation(cascadeId) {
+  var id = typeof cascadeId === 'string' ? cascadeId.trim() : '';
+  if (!id || !/^[A-Za-z0-9_.-]{1,128}$/.test(id)) {
+    return { ok: false, reason: 'invalid_cascade_id' };
+  }
+  var targetPath = '/c/' + encodeURIComponent(id);
+  if (global.location && global.location.pathname === targetPath) {
+    return { ok: true, cascadeId: id, path: targetPath, unchanged: true };
+  }
+  try {
+    if (global.history && typeof global.history.pushState === 'function') {
+      global.history.pushState(null, '', targetPath);
+    }
+  } catch (_) {}
+  try {
+    if (typeof global.CustomEvent === 'function') {
+      global.dispatchEvent(new CustomEvent('ag-open-conversation', {
+        detail: { cascadeId: id, path: targetPath }
+      }));
+    }
+  } catch (_) {}
+  return { ok: true, cascadeId: id, path: targetPath };
+}
+
 function installMobileBridge() {
   if (state.installed) return;
   state.installed = true;
@@ -34,6 +58,7 @@ function installMobileBridge() {
   state.dictating = isVoiceDictatingNative();
   installVoiceWebSocketHook();
   installMicTrackObserver();
+  installMicrophonePermissionShim();
   installClipboardImageInterceptor();
   installFocusTracking();
   mountQuickControls();
@@ -43,14 +68,21 @@ function installMobileBridge() {
     global.__AG_PENDING_SHARED_PAYLOAD__ = null;
     deliverSharedPayload(stashed);
   }
+  if (global.__AG_PENDING_CASCADE_ID__) {
+    var pendingConv = global.__AG_PENDING_CASCADE_ID__;
+    global.__AG_PENDING_CASCADE_ID__ = null;
+    openConversation(pendingConv);
+  }
 }
 
-// Install WebSocket/mic hooks immediately so early voice connections are observed.
+// Install WebSocket/mic/permission hooks immediately so early voice checks and connections are observed.
 installVoiceWebSocketHook();
 installMicTrackObserver();
+installMicrophonePermissionShim();
 
 // Expose top-level native callback hooks immediately (before main.js / onUiReady).
 global.__agDeliverSharedPayload = deliverSharedPayload;
+global.__agOpenConversation = openConversation;
 global.__agExtraKey = dispatchExtraKey;
 global.__agExtraKeysVisibilityChanged = onExtraKeysVisibilityChanged;
 global.__agDeliverVoiceText = deliverVoiceText;
@@ -61,6 +93,7 @@ global.__agDeliverPastedImage = deliverPastedImage;
 global.__agMobileBridge = {
   __installed: true,
   deliverSharedPayload: deliverSharedPayload,
+  openConversation: openConversation,
   dispatchExtraKey: dispatchExtraKey,
   deliverVoiceText: deliverVoiceText,
   deliverPastedImage: deliverPastedImage,
@@ -97,6 +130,9 @@ global.__agMobileBridge = {
       dictating: state.dictating,
       voiceServiceActive: state.voiceServiceActive || isVoiceServiceActiveNative(),
       voiceServiceMuted: state.voiceServiceMuted,
+      voiceWsState: state.voiceWsState,
+      voiceLastError: state.voiceLastError,
+      voiceMicLevel: state.voiceMicLevel,
       activeVoiceSockets: state.activeVoiceSockets.length,
       desktopMode: getDesktopModeState(),
       extraKeysVisible: getExtraKeysState(),

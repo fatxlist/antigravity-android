@@ -259,12 +259,18 @@ public final class SystemGatewayServer {
                     responseJson = ApprovalActionReceiver.poll(context, id, waitMs);
                 } else if ("GET".equals(method) && path.startsWith("/gateway/voice/status")) {
                     responseJson = VoiceForegroundService.getStatusJson();
-                } else if ("POST".equals(method) && ("/gateway".equals(path) || path.startsWith("/gateway?"))) {
+                } else if ("POST".equals(method) && ("/gateway".equals(path) || path.startsWith("/gateway?")
+                        || "/gateway/notify".equals(path) || path.startsWith("/gateway/notify?"))) {
                     String bodyStr = readBody(in, contentLength);
                     JSONObject req = !bodyStr.isEmpty() ? new JSONObject(bodyStr) : new JSONObject();
-                    String cmd = req.optString("command", "");
-                    JSONObject payload = req.optJSONObject("payload");
-                    responseJson = dispatcher.dispatch(cmd, payload);
+                    if (path.startsWith("/gateway/notify")) {
+                        JSONObject payload = req.optJSONObject("payload");
+                        responseJson = dispatcher.dispatch("notify", payload != null ? payload : req);
+                    } else {
+                        String cmd = req.optString("command", "");
+                        JSONObject payload = req.optJSONObject("payload");
+                        responseJson = dispatcher.dispatch(cmd, payload);
+                    }
                 } else {
                     statusCode = 404;
                     statusText = "Not Found";

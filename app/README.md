@@ -35,17 +35,19 @@ graph TD
         CPS --> CRP["CoreReadyProbe (Зондирование https://127.0.0.1:port)"]
         CPS --> OUW["OpenUrlWatcher (Перехват OAuth/URL из stdout потока)"]
         CPS --> LS["Процесс language_server (Glibc / ARM64)"]
-        CSS --> AGD["Фоновый демон agy-daemon (CLI Task Engine)"]
+        CSS --> AGD["Фоновый демон agy-daemon (Scheduler + ConnectRPC)"]
     end
 
     subgraph Gateway_Layer ["Системный шлюз (System Gateway)"]
-        CSS --> SGS["SystemGatewayServer (HTTP Server на 127.0.0.1:45161)"]
+        CSS --> SGS["SystemGatewayServer (HTTP Server на 127.0.0.1:45160 release / 45161 dev)"]
         SGS --> GD["GatewayDispatcher"]
-        GD --> NH["NotificationHandler (Каналы задач и алертов)"]
+        GD --> NH["NotificationHandler (Каналы задач, алертов и субагентов)"]
         GD --> BH["BrowserHandler (Открытие системного браузера)"]
         GD --> PH["PowerHandler (Управление частичными WakeLock)"]
         GD --> CH["ClipboardHandler (Чтение/запись системного буфера)"]
-        GD --> DH["DeviceHandler (Батарея, сеть, вибро, тосты)"]
+        GD --> DH["DeviceHandler (Батарея, сеть, вибро, тосты, фонарик)"]
+        GD --> DOC["DoctorHandler (Самодиагностика и safe-ремонт)"]
+        GD --> WBA["WebBrowserAutomationHandler (Offscreen WebView)"]
         GD --> EH["ExecHandler (Локальное выполнение команд и rish)"]
     end
 
@@ -58,7 +60,7 @@ graph TD
 
     WVH -.->|JS Call| AB
     LS -.->|Stdout Stream| OUW
-    AGD -.->|JSON over HTTP| SGS
+    AGD -.->|ConnectRPC / Gateway HTTP| SGS
     NH -.->|Android Notifications| Platform_Layer
     EH -.->|Elevated Shell| SHB
 ```
@@ -111,30 +113,36 @@ graph TD
 
 ### 2.3. Системный шлюз (`com.agy.gateway`)
 
-Встроенный высокопроизводительный HTTP-сервер (`SystemGatewayServer`), слушающий строго на `127.0.0.1:45161` (с авто-фоллбэком на порт `+2` при занятости). Номер порта сохраняется в `files/logs/gateway.port`.
+Встроенный высокопроизводительный HTTP-сервер (`SystemGatewayServer`), слушающий строго на `127.0.0.1` (по умолчанию `45160` в release-сборке и `45161` в dev-сборке из `config/app.env`, с авто-фоллбэком на порт `+2` при занятости). Номер порта сохраняется в `files/logs/gateway.port`.
 
 Шлюз обеспечивает мост между окружением Linux (bash-скрипты, CLI-утилиты `agy-notify`, `agy-daemon`) и нативными Android API:
 
-| Команда | Обработчик | Описание |
+| Команда / Маршрут | Обработчик | Описание |
 | :--- | :--- | :--- |
-| `notify` | `NotificationHandler` | Публикация, обновление прогресса и отмена Android-уведомлений в каналах `agy_tasks` и `agy_alerts`. |
+| `notify` (`POST /gateway/notify`) | `NotificationHandler` | Публикация, обновление прогресса и отмена уведомлений в каналах `agy_tasks`, `agy_alerts` и `agy_subagents` (с опциональным `cascade_id` deep-link). |
+| `subagent_notify` | `NotificationHandler` | Публикация и обновление прогресса субагентов с кнопкой отмены (`Cancel`). |
+| `approval_poll` (`GET /gateway/approval`) | `ApprovalActionReceiver` | Опрос результата интерактивного подтверждения (`Approve`/`Deny` + inline-комментарий). |
+| `voice_service` (`GET /gateway/voice/status`) | `VoiceForegroundService` | Управление и чтение статуса голосовой сессии (`start`, `stop`, `mute`, `unmute`, `toggle_mute`, `status`, `audio_route`). |
 | `open_url` | `BrowserHandler` | Открытие внешних ссылок и системных документов через `UriDispatcher`. |
+| `browser_auto` | `WebBrowserAutomationHandler` | Автоматизация изолированного offscreen WebView (`navigate`, `eval`, `click`, `type`, `get_text`, `screenshot`, `console_logs`, `close`). |
 | `wakelock` | `PowerHandler` | Захват и освобождение именованных частичных WakeLock'ов для длительных скриптов. |
 | `clipboard` / `clipboard_set` | `ClipboardHandler` | Асинхронное чтение и запись в системный буфер обмена на UI-потоке. |
 | `system_info` | `DeviceHandler` | Сбор телеметрии: уровень заряда батареи, статус зарядки, тип сети, свободная память и диск. |
 | `vibrate` | `DeviceHandler` | Тактильный отклик (Haptic Feedback) заданной длительности. |
 | `toast` | `DeviceHandler` | Отображение нативных всплывающих сообщений (Toast). |
-| `exec` | `ExecHandler` | Выполнение команд в шелле (`/system/bin/sh` или повышенный `rish` через Shizuku) с таймаутом и захватом потоков. |
-| `/gateway/status` | `SystemGatewayServer` | Проверка состояния шлюза (health check). |
-| `/gateway/logs` | `SystemGatewayServer` | Чтение последних строк системного лога из кольцевого буфера памяти. |
-| `/gateway/commands` | `SystemGatewayServer` | История выполненных шлюзом команд и их статусов. |
-| `/gateway/crash` | `SystemGatewayServer` | Диагностический снимок последнего падения ядра. |
+| `torch` | `DeviceHandler` | Управление вспышкой/фонариком через Camera2 / `TorchReceiver`. |
+| `exec` / `exec_start` / `exec_status` / `exec_poll` / `exec_cancel` / `exec_list` / `tasks` | `ExecHandler` | Синхронное и асинхронное выполнение команд в шелле (`/system/bin/sh` или повышенный `rish` через Shizuku) с таймаутом и захватом потоков. |
+| `doctor` / `repair` | `DoctorHandler` | Самодиагностика 10 компонентов окружения (включая `daemon`, `notification_permission`, `microphone_permission`) и безопасная очистка кэша. |
+| `status` / `health` (`GET /gateway/status`, `GET /gateway/health`) | `GatewayDispatcher` / `SystemGatewayServer` | Проверка состояния шлюза и готовности `language_server` (health check). |
+| `logs` (`GET /gateway/logs`) | `GatewayDispatcher` / `SystemGatewayServer` | Чтение последних строк системного лога из кольцевого буфера памяти. |
+| `commands` / `command_get` (`GET /gateway/commands`) | `GatewayDispatcher` / `SystemGatewayServer` | История выполненных шлюзом команд и их детальных статусов. |
+| `crash` (`GET /gateway/crash`) | `GatewayDispatcher` / `SystemGatewayServer` | Диагностический снимок последнего падения ядра. |
 
 ### 2.4. Безопасность и JavaScript Bridge (`com.agy.bridge`)
 
 Класс `AndroidBridge` предоставляет минимальный, жестко изолированный интерфейс для фронтенда (`@JavascriptInterface`).
 
-- **Защита от сторонних фреймов:** Опасные операции (`onUiReady`, `onUiError`, `saveBlob`) требуют передачи криптографического токена `blobBridgeToken`, известного только доверенному верхнеуровневому документу. Сравнение токенов производится через `MessageDigest.isEqual` во избежание timing-атак.
+- **Защита от сторонних фреймов:** Все 13 привилегированных операций (`onUiReady`, `onUiError`, `setSurfaceColor`, `openLocalPreview`, `openRemotePortal`, `startVoiceDictation`, `stopVoiceDictation`, `startVoiceService`, `stopVoiceService`, `setVoiceMuted`, `showAgentNotification`, `readClipboardImage`, `saveBlob`) требуют передачи криптографического токена `blobBridgeToken`, известного только доверенному верхнеуровневому документу. Сравнение токенов производится через `MessageDigest.isEqual` во избежание timing-атак.
 - **Изоляция:** Из интерфейса `AndroidBridge` исключен доступ к выполнению шелла, отправке произвольных нотификаций и прямому доступу к Shizuku. Все привилегированные операции вынесены в локальный шлюз `SystemGatewayServer`.
 
 ### 2.5. Динамические иконки и темы (`com.agy.theme`)
@@ -191,3 +199,22 @@ graph TD
 - **Хардкод `/storage/emulated/0/` (ИСПРАВЛЕНО):** В `DocumentsContractHelper` и `LogExporter` жестко прописанный путь первичного пользователя заменен на `Environment.getExternalStorageDirectory().getAbsolutePath()`, гарантируя корректную работу в рабочих профилях (Work Profile) и для мультипользовательских окружений (`/storage/emulated/<userId>/`).
 - **Уязвимость `AppFileProvider` (ИСПРАВЛЕНО):** В `getFileForUri` добавлена проверка канонического пути (`file.getCanonicalPath()`) против разрешенных каталогов песочницы (`filesDir`, `cacheDir`, `dataDir`, `getExternalStorageDirectory()`, `getExternalFilesDir()`), защищающая от атак типа Path Traversal (`../`).
 - **DNS-резолвинг в Bionic-мостах `ShellBridgeInstaller` (ИСПРАВЛЕНО):** `CoreEnvironment` задаёт `GODEBUG=netdns=go` для glibc-ядра `language_server`, из-за чего дочерние Bionic Go-инструменты (`gh` и др.) пытались читать `/data/data/com.termux/.../resolv.conf` и падали на `[::1]:53`. `ShellBridgeInstaller` (`BRIDGE_FORMAT = 6`) очищает токен `netdns=go` из `GODEBUG` при запуске Bionic-мостов (`writeBridge`, `writeNodeBridge`, `writeExecBridge`), возвращая им нативный cgo/netd-резолвер Android.
+
+---
+
+## Subdirectories & Boundaries
+- `src`: [./src/README.md](./src/README.md) - Android host application manifest (`AndroidManifest.xml`), resources (`res/`), and production Java packages (`./src/main/java/com/agy/README.md`).
+
+## Global Invariants
+- **Target SDK & Binary Execution Boundary**: `[src/main/AndroidManifest.xml:targetSdkVersion]` pins `targetSdkVersion="28"` (`minSdkVersion="24"`) so Android permits `exec` of `libloader.so` and `language_server` inside `<filesDir>/runtime/bin`.
+- **Loopback Origin, TLS Pinning & Token Auth**: `[src/main/java/com/agy/core/CoreReadyProbe.java:configurePinnedLoopbackTls]` and `[src/main/java/com/agy/core/ApprovalActionReceiver.java:isLoopbackCallbackUrl]` restrict core callbacks to pinned loopback TLS (`res/raw/agy_core_cert`); `[src/main/java/com/agy/util/TrustedCoreOrigin.java:matches]` enforces `https://127.0.0.1:<port>` with null userinfo; `[src/main/java/com/agy/gateway/SystemGatewayServer.java:isAuthorized]` enforces constant-time token checks (`DEFAULT_PORT = 45160`, single `+2` fallback, `logs/gateway.token` mode `0600`); `[src/main/java/com/agy/bridge/AndroidBridge.java:matchesNativeBridgeToken]` gates sensitive WebView JS calls with a 32-byte `SecureRandom` token; `[src/main/java/com/agy/ui/webview/AgyWebViewClient.java:handleNavigation]` cancels all TLS errors fail-closed.
+- **Canonical Sandbox Containment**: `[src/main/java/com/agy/util/PathSafety.java:isInside]` and `[src/main/java/com/agy/util/AppFileProvider.java:isAllowedPath]` enforce canonical path bounds and block `.gemini`, `logs/gateway.token`, `logs/core.state.json`, `logs/approvals.json`, `shared_prefs`, and `databases` from `ContentProvider` exposure.
+- **Fail-Closed Phase 1 & Idempotent Phase 2 Install**: `[src/main/java/com/agy/runtime/CoreInstaller.java:installCore]` verifies extracted runtime SHA-256 via `[src/main/java/com/agy/runtime/ManifestVerifier.java:verifyError]` before readiness; `[src/main/java/com/agy/install/EnvInstaller.java:install]` serializes prefix installation on `EnvInstaller.class` with staging and 15s bash smoke-test rollback.
+- **Process & IPC Bounding**: `[src/main/java/com/agy/core/CoreProcessSupervisor.java:runCoreLoop]` caps post-ready restarts at `MAX_RESTARTS = 3`; `[src/main/java/com/agy/gateway/handlers/ExecHandler.java:ExecTask.drainStream]` and `[src/main/java/com/agy/shell/RishExecutor.java:MAX_OUTPUT_BYTES]` bound stdout/stderr capture to `262144` bytes (with 60s timeout in `RishExecutor`); `[src/main/java/com/agy/ui/download/FileDownloader.java:MAX_BLOB_BYTES]` caps decoded blob downloads at 64 MiB.
+
+## Global Side Effects
+- **Managed App Storage**: Unpacks/maintains `<filesDir>/runtime/`, `<filesDir>/web/`, `<filesDir>/usr/`, `<filesDir>/etc/{resolv.conf,hosts}`, `<filesDir>/.gemini/`, and `<filesDir>/logs/{core.log,core.prev.log,core.state.json,gateway.port,gateway.token,approvals.json,crashes/}` (`[src/main/java/com/agy/runtime/CoreInstaller.java:installCore]`, `[src/main/java/com/agy/install/EnvInstaller.java:install]`, `[src/main/java/com/agy/gateway/SystemGatewayServer.java:loadOrCreateToken]`, `[src/main/java/com/agy/log/CrashRecorder.java:persistReport]`).
+- **Processes, Sockets & Hardware**: Spawns/supervises `language_server` and `agy-daemon` child processes (`[src/main/java/com/agy/core/CoreProcessSupervisor.java:runCoreLoop]`), binds loopback HTTP server `127.0.0.1` (`[src/main/java/com/agy/gateway/SystemGatewayServer.java:start]`), acquires partial wake locks and audio focus (`[src/main/java/com/agy/core/CoreServerService.java:onStartCommand]`, `[src/main/java/com/agy/core/VoiceForegroundService.java:acquireWakeLock]`), and controls device camera torch/clipboard/notifications/external browser intents (`[src/main/java/com/agy/gateway/GatewayDispatcher.java:dispatch]`, `[src/main/java/com/agy/oauth/CustomTabLauncher.java:openInBrowser]`).
+
+## Verification
+- Run: `bash app/src/test/run_java_tests.sh`

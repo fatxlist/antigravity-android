@@ -195,7 +195,11 @@ public final class NotificationHandler {
         try {
             String action = payload.optString("action", "post");
             String tag = payload.optString("tag", "agy_task");
-            int id = payload.optInt("id", (int) (System.currentTimeMillis() % 100000));
+            if (tag == null || tag.trim().isEmpty()) {
+                tag = "agy_task";
+            }
+            int defaultId = 1000 + Math.abs(tag.hashCode() % 89000);
+            int id = payload.has("id") ? payload.optInt("id", defaultId) : defaultId;
 
             if ("cancel".equalsIgnoreCase(action)) {
                 if (manager != null) {
@@ -235,9 +239,10 @@ public final class NotificationHandler {
 
             String defaultChannel = (isToolApproval || hasActions) ? CHANNEL_ALERTS : CHANNEL_TASKS;
             String channel = payload.optString("channel", defaultChannel);
-            if (channel == null || channel.trim().isEmpty()) {
+            if (!isKnownChannel(channel)) {
                 channel = defaultChannel;
             }
+            boolean onlyAlertOnce = payload.optBoolean("only_alert_once", false);
             String requestId = payload.optString("request_id", "").trim();
             String callbackUrl = payload.optString("callback_url", "").trim();
             String cascadeId = payload.optString("cascade_id", "").trim();
@@ -259,12 +264,12 @@ public final class NotificationHandler {
                     ? new Notification.Builder(context, channel)
                     : new Notification.Builder(context);
 
-            Intent openIntent = HostActivityResolver.createOpenIntent(context);
+            Intent openIntent = HostActivityResolver.createOpenIntent(context, cascadeId);
             int contentPiFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 contentPiFlags |= PendingIntent.FLAG_IMMUTABLE;
             }
-            int contentReqCode = ("content:" + tag + ":" + id).hashCode();
+            int contentReqCode = ("content:" + tag + ":" + id + ":" + cascadeId).hashCode();
             PendingIntent contentIntent = PendingIntent.getActivity(
                     context, contentReqCode, openIntent, contentPiFlags);
 
@@ -273,7 +278,8 @@ public final class NotificationHandler {
                     .setSmallIcon(icon)
                     .setContentIntent(contentIntent)
                     .setOngoing(ongoing)
-                    .setAutoCancel(!ongoing);
+                    .setAutoCancel(!ongoing)
+                    .setOnlyAlertOnce(onlyAlertOnce);
 
             if (message.length() > 40) {
                 builder.setStyle(new Notification.BigTextStyle().bigText(message));
@@ -404,6 +410,12 @@ public final class NotificationHandler {
         } catch (Exception ignored) {
         }
         return actions;
+    }
+
+    private static boolean isKnownChannel(String channel) {
+        return CHANNEL_TASKS.equals(channel)
+                || CHANNEL_ALERTS.equals(channel)
+                || CHANNEL_SUBAGENTS.equals(channel);
     }
 
     private static String sanitizeTag(String raw) {

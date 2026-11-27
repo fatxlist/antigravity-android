@@ -1,9 +1,9 @@
 #!/data/data/com.agy/files/usr/bin/bash
-# deb.sh -- read .deb (ar archive) + extract members. No `ar` dependency.
+# deb.sh -- read .deb (ar archive) + validated single-pass inspection & extraction. No `ar` dependency.
 # Uses dd/tail/head for ar, tar for payloads, and xz/gzip/zstd/bzip2 by suffix.
 
-# ar_members FILE -> member names
-ar_members() {
+# ar_index FILE -> lines of "name\toffset\tsize"
+ar_index() {
     local file="$1" off=8 hdr name size data
     while :; do
         hdr="$(dd if="$file" bs=1 skip="$off" count=60 2>/dev/null)"
@@ -11,28 +11,30 @@ ar_members() {
         name="$(printf '%s' "$hdr" | cut -c1-16 | sed 's/[[:space:]]*$//; s:/$::')"
         size="$(printf '%s' "$hdr" | cut -c49-58 | sed 's/ //g')"
         [ -n "$name" ] && [ -n "$size" ] || break
-        printf '%s\n' "$name"
         data=$((off + 60))
+        printf '%s\t%s\t%s\n' "$name" "$data" "$size"
         off=$((data + size + (size % 2)))
     done
 }
 
+# ar_slice FILE OFFSET SIZE -> raw member bytes on stdout
+ar_slice() {
+    tail -c +$(($2 + 1)) "$1" | head -c "$3"
+}
+
+# ar_members FILE -> member names
+ar_members() {
+    ar_index "$1" | awk -F'\t' '{ print $1 }'
+}
+
 # ar_member FILE NAME -> raw member bytes on stdout
 ar_member() {
-    local file="$1" want="$2" off=8 hdr name size data
-    while :; do
-        hdr="$(dd if="$file" bs=1 skip="$off" count=60 2>/dev/null)"
-        [ "${#hdr}" -ge 58 ] || return 1
-        name="$(printf '%s' "$hdr" | cut -c1-16 | sed 's/[[:space:]]*$//; s:/$::')"
-        size="$(printf '%s' "$hdr" | cut -c49-58 | sed 's/ //g')"
-        [ -n "$size" ] || return 1
-        data=$((off + 60))
-        if [ "$name" = "$want" ]; then
-            tail -c +$((data + 1)) "$file" | head -c "$size"
-            return 0
-        fi
-        off=$((data + size + (size % 2)))
-    done
+    local file="$1" want="$2" line off size
+    line="$(ar_index "$file" | awk -F'\t' -v w="$want" '$1 == w { print $2 "\t" $3; exit }')"
+    [ -n "$line" ] || return 1
+    off="${line%%	*}"
+    size="${line#*	}"
+    ar_slice "$file" "$off" "$size"
 }
 
 deb_decode() { # NAME  (reads stdin)
@@ -45,76 +47,135 @@ deb_decode() { # NAME  (reads stdin)
     esac
 }
 
-deb_member_name() { # FILE control|data
-    ar_members "$1" | grep -E "^$2\.tar\." | head -n 1
+_deb_find_member() { # FILE control|data -> "name\toffset\tsize"
+    ar_index "$1" | awk -F'\t' -v k="$2" '$1 ~ ("^" k "\\.tar\\.") { print $0; exit }'
 }
 
-deb_field() { # FILE FIELD -> value (authoritative control)
-    local f="$1" field="$2" m control_path val
-    m="$(deb_member_name "$f" control)"
-    [ -n "$m" ] || return 1
-    control_path="$(ar_member "$f" "$m" | deb_decode "$m" | tar -tf - 2>/dev/null \
-        | awk '$0 == "./control" || $0 == "control" { print; exit }')"
-    [ -n "$control_path" ] || return 1
-    val="$(ar_member "$f" "$m" | deb_decode "$m" \
-        | tar -xOf - "$control_path" 2>/dev/null \
+deb_member_name() { # FILE control|data
+    local entry; entry="$(_deb_find_member "$1" "$2")"
+    [ -n "$entry" ] || return 1
+    printf '%s\n' "${entry%%	*}"
+}
+
+deb_field() { # FILE FIELD -> value (authoritative control, single ar/decompress pass)
+    local f="$1" field="$2" entry m rest off sz val
+    entry="$(_deb_find_member "$f" control)"
+    [ -n "$entry" ] || return 1
+    m="${entry%%	*}"
+    rest="${entry#*	}"
+    off="${rest%%	*}"
+    sz="${rest#*	}"
+    val="$(ar_slice "$f" "$off" "$sz" | deb_decode "$m" \
+        | tar -xOf - ./control control 2>/dev/null \
         | awk -v k="$field" 'index($0, k":") == 1 { sub(/^[^:]*: /, ""); print; exit }')"
+    [ -n "$val" ] || return 1
     printf '%s\n' "$val"
 }
 
-deb_validate_data() { # FILE -- reject absolute/traversal/non-prefix entries
-    local m
-    m="$(deb_member_name "$1" data)"
-    [ -n "$m" ] || return 1
-    ar_member "$1" "$m" | deb_decode "$m" | tar -tf - 2>/dev/null | awk '
+# _deb_validate_and_list STRIP [LIST_OUT]
+# Reads tar -tf - output on stdin; rejects traversal/absolute/non-prefix entries,
+# and optionally writes unique sorted stripped relative paths to LIST_OUT in one pass.
+_deb_validate_and_list() {
+    local strip="$1" list_out="${2:-}"
+    awk -v s="$strip" -v out_file="$list_out" '
         {
-            path = $0
-            if (path == "" || substr(path, 1, 1) == "/" || index(path, "\\") > 0) {
+            raw = $0
+            if (raw == "" || substr(raw, 1, 1) == "/" || index(raw, "\\") > 0) {
                 bad = 1; next
             }
-            if (path == "./" || path == ".") next
-            if (substr(path, 1, 2) != "./") { bad = 1; next }
-            path = substr(path, 3)
-            if (substr(path, length(path), 1) == "/") path = substr(path, 1, length(path) - 1)
-            n = split(path, part, "/")
+            if (raw == "./" || raw == ".") next
+            if (substr(raw, 1, 2) != "./") { bad = 1; next }
+            rel = substr(raw, 3)
+            if (substr(rel, length(rel), 1) == "/") rel = substr(rel, 1, length(rel) - 1)
+            n = split(rel, part, "/")
             if (part[1] != "data") { bad = 1; next }
             if (n >= 2 && part[2] != "data") { bad = 1; next }
             if (n >= 3 && part[3] !~ /^[A-Za-z0-9][A-Za-z0-9+._-]*$/) { bad = 1; next }
             if (n >= 4 && part[4] != "files") { bad = 1; next }
             if (n >= 5 && part[5] != "usr") { bad = 1; next }
             for (i = 1; i <= n; i++) if (part[i] == ".." || part[i] == ".") bad = 1
+
+            if (!bad && out_file != "") {
+                fn = split(raw, fpart, "/")
+                if (fn > 0 && fpart[fn] == "") fn--
+                if (fn > s) {
+                    p = ""
+                    for (j = s + 1; j <= fn; j++) p = p (j > s + 1 ? "/" : "") fpart[j]
+                    if (p != "" && !(p in seen)) {
+                        seen[p] = 1
+                    }
+                }
+            }
         }
-        END { if (bad) exit 1 }
-    '
+        END {
+            if (bad) exit 1
+            if (out_file != "") {
+                printf "" > out_file
+                for (p in seen) print p >> out_file
+                close(out_file)
+            }
+        }
+    ' || return 1
+    if [ -n "$list_out" ] && [ -s "$list_out" ]; then
+        LC_ALL=C sort -u -o "$list_out" "$list_out"
+    fi
+}
+
+deb_validate_data() { # FILE -- reject absolute/traversal/non-prefix entries
+    local entry m rest off sz
+    entry="$(_deb_find_member "$1" data)"
+    [ -n "$entry" ] || return 1
+    m="${entry%%	*}"
+    rest="${entry#*	}"
+    off="${rest%%	*}"
+    sz="${rest#*	}"
+    ar_slice "$1" "$off" "$sz" | deb_decode "$m" | tar -tf - 2>/dev/null \
+        | _deb_validate_and_list "${PKG_DEB_STRIP:-6}"
+}
+
+deb_install_data() { # FILE DEST STRIP LIST_OUT -- single ar scan: validate+list then extract
+    local f="$1" dest="$2" strip="${3:-${PKG_DEB_STRIP:-6}}" list_out="$4"
+    local entry m rest off sz
+    entry="$(_deb_find_member "$f" data)"
+    [ -n "$entry" ] || return 1
+    m="${entry%%	*}"
+    rest="${entry#*	}"
+    off="${rest%%	*}"
+    sz="${rest#*	}"
+    ar_slice "$f" "$off" "$sz" | deb_decode "$m" | tar -tf - 2>/dev/null \
+        | _deb_validate_and_list "$strip" "$list_out" || return 1
+    ar_slice "$f" "$off" "$sz" | deb_decode "$m" \
+        | tar -x --strip-components="$strip" -C "$dest" 2>/dev/null
 }
 
 deb_extract_data() { # FILE DEST [STRIP]
-    local m strip="${3:-${PKG_DEB_STRIP:-6}}"
-    deb_validate_data "$1" || return 1
-    m="$(deb_member_name "$1" data)"
-    [ -n "$m" ] || return 1
-    ar_member "$1" "$m" | deb_decode "$m" | tar -x --strip-components="$strip" -C "$2" 2>/dev/null
+    local entry m rest off sz strip="${3:-${PKG_DEB_STRIP:-6}}"
+    entry="$(_deb_find_member "$1" data)"
+    [ -n "$entry" ] || return 1
+    m="${entry%%	*}"
+    rest="${entry#*	}"
+    off="${rest%%	*}"
+    sz="${rest#*	}"
+    ar_slice "$1" "$off" "$sz" | deb_decode "$m" | tar -tf - 2>/dev/null \
+        | _deb_validate_and_list "$strip" || return 1
+    ar_slice "$1" "$off" "$sz" | deb_decode "$m" | tar -x --strip-components="$strip" -C "$2" 2>/dev/null
 }
 
 deb_files() { # FILE -> relative paths under the stripped data prefix
-    local m strip="${PKG_DEB_STRIP:-6}"
-    deb_validate_data "$1" || return 1
-    m="$(deb_member_name "$1" data)"
-    [ -n "$m" ] || return 1
-    # Strip the leading N path components by position instead of matching a
-    # hardcoded prefix string. The data prefix is the foreign (Termux) prefix
-    # but has the same depth as ours, and the rewrite pass repoints every
-    # occurrence of the foreign prefix -- including this file -- so matching a
-    # literal here would break after installation.
-    ar_member "$1" "$m" | deb_decode "$m" \
-        | tar -t 2>/dev/null \
-        | awk -v s="$strip" -F/ '{
-              n = NF
-              if (n > 0 && $n == "") n--
-              if (n <= s) next
-              out = ""
-              for (i = s + 1; i <= n; i++) out = out (i > s + 1 ? "/" : "") $i
-              print out
-          }' \
-        | grep -v '^$' | sort -u
+    local entry m rest off sz strip="${PKG_DEB_STRIP:-6}" tmp_list
+    entry="$(_deb_find_member "$1" data)"
+    [ -n "$entry" ] || return 1
+    m="${entry%%	*}"
+    rest="${entry#*	}"
+    off="${rest%%	*}"
+    sz="${rest#*	}"
+    tmp_list="$(mktemp "${TMPDIR:-/tmp}/deb_files.XXXXXX" 2>/dev/null || mktemp)"
+    if ar_slice "$1" "$off" "$sz" | deb_decode "$m" | tar -tf - 2>/dev/null \
+            | _deb_validate_and_list "$strip" "$tmp_list"; then
+        cat "$tmp_list"
+        rm -f "$tmp_list"
+        return 0
+    fi
+    rm -f "$tmp_list"
+    return 1
 }

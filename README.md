@@ -145,6 +145,33 @@ antigravity-android/
 
 ---
 
+## Local Interface & Invariants
+- `[build.sh:exec]`: Root APK build wrapper forwarding all CLI arguments (`--dev`, `--allow-debug-sign`, `--fast`, `--prefix`, `--out`) to `modules/builder/build_apk.sh` under `set -euo pipefail`.
+- `[test_all_modules.sh:PROJECT_ROOT]`: Master 11-stage verification runner executing `check_versions.py`, `modules/{core,patches,io,env,builder}/tests/run_all.sh`, `env/tests` unittest discovery, `env/build.sh assets` + `env/tests/invariant`, `web/build.sh` + `web/tests/selftest.sh` + optional `node web/tests/test_web_patches.mjs`, `app/src/test/run_java_tests.sh`, and `modules/runner/test_e2e.sh` under `set -euo pipefail`.
+- Invariants: `[build.sh:SCRIPT_DIR]` resolves paths dynamically relative to `BASH_SOURCE[0]` without modifying source state directly; `[test_all_modules.sh:command -v node]` skips `web/tests/test_web_patches.mjs` if `node` is absent on `PATH`, while failing fast (`set -euo pipefail`) on any other stage failure.
+- Side effects: `[build.sh:exec]` invokes `modules/builder/build_apk.sh` (wiping `build/` and `dist/` and producing signed APKs); `[test_all_modules.sh:PROJECT_ROOT]` changes `cwd` to `$PROJECT_ROOT`, rebuilds `env/dist/` and `web/generated/**`, creates temporary test sandboxes, and starts/stops a live standalone `language_server` during stage 11 (`modules/runner/test_e2e.sh`).
+
+## Subdirectories & System Boundaries
+- `app`: [./app/README.md](./app/README.md) - Android native host shell (`targetSdk 28`, `minSdk 24`): `MainActivity`/`ShareReceiverActivity` WebView UI, token-gated `AndroidBridge`, `CoreServerService` supervisor, pinned-TLS `CoreReadyProbe`, loopback `SystemGatewayServer` (`45160` release / `45161` dev), Bionic prefix installer (`EnvInstaller`), and Shizuku `RishExecutor`.
+- `env`: [./env/README.md](./env/README.md) - Bionic ARM64 rootfs builder (`build.sh`), Termux bootstrap & prefix rewriter, `liblse_compat.so` SIGILL ARMv8.1-8.4 instruction emulator, `pkg` Bash/AWK package manager, `agy-daemon` scheduler, `agy-mcp-android`/`agy-mcp-browser` stdio MCP servers, `agy-notify`, and `agy-upgrade`.
+- `modules`: [./modules/README.md](./modules/README.md) - Decoupled build and runtime subsystem: Gradle-free APK pipeline (`builder`), AArch64 runtime bundler/validator/shims (`core`), path/env/gateway client & CLI (`env`), pub/sub IPC bus (`io`), Go ELF binary patcher (`patches`), and standalone core lifecycle runner (`runner`).
+- `web`: [./web/README.md](./web/README.md) - Local React SPA shell (`index.html`), manifest-driven bundle builder (`src.manifest`, `build.sh` -> `web/generated/**`), Desktop Mode `patch_main.py`, boot/core/mobile/theme/IME patches (`./web/src/README.md`), AudioWorklet/Myers diff/page automation scripts, and PDF.js/Shiki workers (`./web/workers/README.md`).
+
+## Global Invariants
+- **Single Source of Truth & Version Parity**: `[config/app.env:APP_VERSION_NAME]` and `[config/app.env:CORE_VERSION]` (`2.5.2` / `2.34.0`) drive `[modules/builder/01_gen_config.py:main]` and are enforced against `README.md`, `README.ru.md`, `RELEASE_NOTES.md`, and `refs/tags/v*` by `[modules/builder/check_versions.py:main]`.
+- **Android W^X & ARMv8.0-A Compatibility**: `[app/src/main/AndroidManifest.xml:targetSdkVersion]` pins `targetSdkVersion="28"` so Android allows `exec` from `files/runtime/bin`; `[modules/patches/pipeline.py:ACTIVE_MODULES]` patches `language_server` (`faccessat`, `fchmodat`, `sigill_handler`, `resolv_redirect`, `crash_suppressor`, `pty_shell`) while `[env/liblse_compat/liblse_compat.c:sigill_handler]` emulates ARMv8.1-8.4 LSE/SIMD instructions on `SIGILL`.
+- **Loopback Isolation, TLS Pinning & Token Auth**: `[app/src/main/java/com/agy/gateway/SystemGatewayServer.java:start]` binds strictly to `127.0.0.1` (`45160`/`45161`) with constant-time token verification against `0600` `logs/gateway.token`; `[app/src/main/java/com/agy/core/CoreReadyProbe.java:configurePinnedLoopbackTls]` pins loopback core HTTPS to `res/raw/agy_core_cert`; `[app/src/main/java/com/agy/bridge/AndroidBridge.java:matchesNativeBridgeToken]` gates sensitive WebView calls with a per-instance 256-bit token; `[app/src/main/java/com/agy/util/AppFileProvider.java:isAllowedPath]` blocks `.gemini`, `gateway.token`, `core.state.json`, `approvals.json`, `shared_prefs`, and `databases`.
+- **No-Exec / FUSE Containment & Fail-Closed Signing**: `[modules/io/core_bus/event_broker.py:EventBroker.publish]` and `[modules/io/inputs/fifo_input.py:get_safe_pipe_path]` invoke `.sh` scripts via explicit shell interpreters and relocate FIFOs off `/storage/`/`/sdcard/`; `[modules/builder/build_apk.sh:KEYSTORE]` and `[modules/builder/build_apk.sh:ALLOW_DEBUG_SIGN]` refuse production release builds without explicit `AGY_RELEASE_*` credentials.
+
+## Global Side Effects
+- **Build & Packaging Outputs**: `build.sh` / `modules/builder/build_apk.sh`, `env/build.sh`, and `web/build.sh` wipe and regenerate `build/`, `dist/`, `env/dist/`, `env/bootstrap/bootstrap.tar.gz`, and `web/generated/**` on disk.
+- **Device Runtime State & Processes**: At runtime on Android, `app/` and `env/` unpack `runtime/`, `web/`, and `usr/` into `<filesDir>`, mutate `.gemini/` state and `logs/` files, supervise `language_server` and `agy-daemon` processes, bind loopback TCP ports (`45157`/`45158`, `45160`/`45161`), and dispatch Android Intents, notifications, clipboard, wake locks, audio focus, and Camera2 torch actions.
+
+## System Verification
+- Run: `bash test_all_modules.sh`
+
+---
+
 <div align="center">
   <sub>Licensed under the <a href="LICENSE">Apache 2.0 License</a> &bull; Forked from <a href="https://github.com/werdio325-png/antigravity-android">werdio325-png/antigravity-android</a></sub>
 </div>

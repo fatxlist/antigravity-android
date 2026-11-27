@@ -14,6 +14,7 @@ import sys
 sys.dont_write_bytecode = True
 import json
 import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -26,7 +27,7 @@ OVERLAY_LIB = os.path.join(ENV_DIR, "overlay", "lib")
 if OVERLAY_LIB not in sys.path:
     sys.path.insert(0, OVERLAY_LIB)
 
-from daemon import executor  # noqa: E402
+from daemon import executor, scheduler  # noqa: E402
 
 
 class _MockConnectRpcHandler(BaseHTTPRequestHandler):
@@ -45,6 +46,7 @@ class _MockConnectRpcHandler(BaseHTTPRequestHandler):
         self.__class__.recorded_requests.append({
             "path": self.path,
             "csrf": self.headers.get("x-codeium-csrf-token", ""),
+            "gateway_token": self.headers.get("X-Agy-Gateway-Token", ""),
             "connect_version": self.headers.get("Connect-Protocol-Version", ""),
             "content_type": self.headers.get("Content-Type", ""),
             "body": parsed,
@@ -63,6 +65,8 @@ class _MockConnectRpcHandler(BaseHTTPRequestHandler):
             payload = {"cascadeId": self.__class__.start_cascade_id}
         elif self.path.endswith("/SendUserCascadeMessage"):
             payload = {}
+        elif self.path == "/gateway":
+            payload = {"ok": True}
         else:
             self.send_response(404)
             self.end_headers()
@@ -279,6 +283,135 @@ class TestDaemonExecutor(unittest.TestCase):
         self.assertEqual(os.path.normcase(dumped["HOME"]), os.path.normcase(self.home_dir))
         self.assertEqual(os.path.normcase(dumped["PREFIX"]), os.path.normcase(self.prefix_dir))
         self.assertEqual(os.path.normcase(dumped["CWD"]), os.path.normcase(self.home_dir))
+
+    def test_agy_notify_cli_posts_gateway_envelope_with_dynamic_port(self):
+        with open(os.path.join(self.home_dir, "logs", "gateway.port"), "w", encoding="utf-8") as f:
+            f.write(f"{self.port}\n")
+        with open(os.path.join(self.home_dir, "logs", "gateway.token"), "w", encoding="utf-8") as f:
+            f.write("gw-tok-secret-123\n")
+
+        notify_bin = os.path.join(ENV_DIR, "overlay", "bin", "agy-notify")
+        clean_env = dict(os.environ)
+        clean_env["HOME"] = self.home_dir
+        clean_env["PREFIX"] = self.prefix_dir
+        clean_env.pop("AGY_GATEWAY_PORT", None)
+        clean_env.pop("AGY_GATEWAY_TOKEN", None)
+        clean_env.pop("AGY_GATEWAY_TOKEN_FILE", None)
+
+        res = subprocess.run(
+            ["bash", notify_bin, "post", "-t", "Agent Done", "-m", "All checks passed", "--tag", "turn_abc", "--channel", "agy_alerts"],
+            env=clean_env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(res.returncode, 0, f"agy-notify failed: {res.stderr} {res.stdout}")
+        reqs = _MockConnectRpcHandler.recorded_requests
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["path"], "/gateway")
+        self.assertEqual(reqs[0]["gateway_token"], "gw-tok-secret-123")
+        self.assertEqual(reqs[0]["body"]["command"], "notify")
+        payload = reqs[0]["body"]["payload"]
+        self.assertEqual(payload["action"], "post")
+        self.assertEqual(payload["tag"], "turn_abc")
+        self.assertEqual(payload["title"], "Agent Done")
+        self.assertEqual(payload["message"], "All checks passed")
+        self.assertEqual(payload["channel"], "agy_alerts")
+
+    def test_executor_notify_direct_gateway_and_fallback(self):
+        port_path = os.path.join(self.home_dir, "logs", "gateway.port")
+        token_path = os.path.join(self.home_dir, "logs", "gateway.token")
+        with open(port_path, "w", encoding="utf-8") as f:
+            f.write(f"{self.port}\n")
+        with open(token_path, "w", encoding="utf-8") as f:
+            f.write("gw-exec-token-xyz\n")
+
+        clean_env = {k: v for k, v in os.environ.items()
+                     if k not in ("AGY_GATEWAY_PORT", "AGY_GATEWAY_TOKEN", "AGY_GATEWAY_TOKEN_FILE")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with mock.patch.object(executor.subprocess, "run") as mock_run:
+                ok = executor.notify("Task Complete", "Summary here", tag="agy_turn_1", channel="agy_alerts", cascade_id="conv-direct-42")
+        self.assertTrue(ok)
+        mock_run.assert_not_called()
+        reqs = _MockConnectRpcHandler.recorded_requests
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["path"], "/gateway")
+        self.assertEqual(reqs[0]["gateway_token"], "gw-exec-token-xyz")
+        self.assertEqual(reqs[0]["body"]["payload"]["channel"], "agy_alerts")
+        self.assertEqual(reqs[0]["body"]["payload"]["cascade_id"], "conv-direct-42")
+
+        # Removing gateway.token cleanly falls back to agy-notify subprocess with --channel and --cascade-id
+        os.remove(token_path)
+        fallback_calls = []
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with mock.patch.object(executor.subprocess, "run", side_effect=lambda cmd, **kw: fallback_calls.append(cmd) or mock.Mock(returncode=0)):
+                ok2 = executor.notify("Task Complete", "Fallback body", tag="agy_turn_2", channel="agy_alerts", cascade_id="conv-fallback-99")
+        self.assertTrue(ok2)
+        self.assertEqual(len(fallback_calls), 1)
+        self.assertIn("--channel", fallback_calls[0])
+        self.assertIn("agy_alerts", fallback_calls[0])
+        self.assertIn("--cascade-id", fallback_calls[0])
+        self.assertIn("conv-fallback-99", fallback_calls[0])
+
+    def test_scheduler_turn_notifications_ignore_subagents(self):
+        user_id = "11111111-2222-3333-4444-555555555555"
+        sub_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        user_log = os.path.join(self.home_dir, ".gemini", "antigravity-app", "brain", user_id, ".system_generated", "logs", "transcript.jsonl")
+        sub_log = os.path.join(self.home_dir, ".gemini", "antigravity-app", "brain", sub_id, ".system_generated", "logs", "transcript.jsonl")
+        os.makedirs(os.path.dirname(user_log), exist_ok=True)
+        os.makedirs(os.path.dirname(sub_log), exist_ok=True)
+
+        def write_lines(path, records):
+            with open(path, "w", encoding="utf-8") as f:
+                for rec in records:
+                    f.write(json.dumps(rec) + "\n")
+
+        write_lines(user_log, [
+            {"step_index": 0, "type": "USER_INPUT", "source": "USER_EXPLICIT", "status": "DONE", "content": "hi"},
+        ])
+        write_lines(sub_log, [
+            {"step_index": 0, "type": "SYSTEM_MESSAGE", "source": "SYSTEM", "status": "DONE", "content": "init"},
+        ])
+
+        brain_glob = os.path.join(self.home_dir, ".gemini", "antigravity-app", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
+        state = {}
+        posted = []
+
+        with mock.patch.object(scheduler, "_post_gateway_notification", side_effect=lambda *a, **kw: posted.append((a, kw))):
+            # Baseline scan: marks user_log as working, ignores sub_log
+            scheduler._check_conversation_turns(state, brain_glob=brain_glob)
+            self.assertEqual(len(posted), 0)
+
+            # Both write a final PLANNER_RESPONSE DONE with empty tool_calls (ensure size changes)
+            write_lines(user_log, [
+                {"step_index": 0, "type": "USER_INPUT", "source": "USER_EXPLICIT", "status": "DONE", "content": "hi"},
+                {"step_index": 1, "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE", "content": "All **done**!"},
+            ])
+            write_lines(sub_log, [
+                {"step_index": 0, "type": "SYSTEM_MESSAGE", "source": "SYSTEM", "status": "DONE", "content": "init"},
+                {"step_index": 1, "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE", "content": "Subagent summary"},
+            ])
+            scheduler._check_conversation_turns(state, brain_glob=brain_glob)
+
+        self.assertEqual(len(posted), 1, "Only the user conversation turn should notify")
+        args, kwargs = posted[0]
+        self.assertEqual(args[0], "Antigravity: Task Complete")
+        self.assertEqual(args[1], "All done!")
+        self.assertEqual(kwargs.get("tag"), f"agy_turn_{user_id[:12]}")
+        self.assertEqual(kwargs.get("channel"), "agy_alerts")
+        self.assertEqual(kwargs.get("cascade_id"), user_id)
+
+        # Verify ask_question turn also forwards cascade_id
+        posted.clear()
+        with mock.patch.object(scheduler, "_post_gateway_notification", side_effect=lambda *a, **kw: posted.append((a, kw))):
+            write_lines(user_log, [
+                {"step_index": 2, "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
+                 "tool_calls": [{"name": "ask_question"}]},
+            ])
+            scheduler._check_conversation_turns(state, brain_glob=brain_glob)
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0][0][0], "Antigravity: Input Needed")
+        self.assertEqual(posted[0][1].get("cascade_id"), user_id)
 
 
 if __name__ == "__main__":
