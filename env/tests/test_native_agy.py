@@ -249,8 +249,9 @@ class TestNativeAgyBinary(unittest.TestCase):
         pwn_file = os.path.join(self.tmp_dir, "PWNED")
         rish_bin = os.path.join(self.prefix_dir, "bin", "rish")
         capture_log = os.path.join(self.tmp_dir, "rish_calls.log")
+        sh_path = "/system/bin/sh" if os.path.exists("/system/bin/sh") else "/bin/sh"
         with open(rish_bin, "w", encoding="utf-8") as f:
-            f.write("#!/system/bin/sh\necho \"$*\" >> \"$AGY_RISH_LOG\"\neval \"$2\" >/dev/null 2>&1 || true\n")
+            f.write(f"#!{sh_path}\necho \"$*\" >> \"$AGY_RISH_LOG\"\neval \"$2\" >/dev/null 2>&1 || true\n")
         os.chmod(rish_bin, 0o755)
 
         evil_msg = f"hi'; touch '{pwn_file}'; $(touch '{pwn_file}') `touch '{pwn_file}'`"
