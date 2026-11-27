@@ -15,6 +15,7 @@ Android WebView runtime optimization patch concatenated via `web/src.manifest` i
 - `[bundle.js:installMediaErrorFallback]` Attaches a capture-phase `error` listener on `document` that marks failed video `<img>` elements (`data-agy-broken-video="true"`, `display: none`) and appends `<span class="agy-video-badge" data-agy-video-badge="true">` with the uppercase format label.
 - `[bidi.js:installBidi]` Injects `<style data-agy="bidi-fix">` for automatic BiDi prose alignment and LTR code/terminal isolation.
 - `[viewport.js:installViewport]` / `[viewport.js:applyViewportHeight]` Maintains `--agy-vvh` on `document.documentElement.style` using shared IIFE-local `[bundle.js:global]` and `[bundle.js:doc]`.
+- `[tablet-scale.js:installTabletScale]` Scales the UI on tablets (`>= 600` CSS px) by narrowing the `<meta name="viewport">` layout width and setting `initial-scale` (`1.2x` / `1.3x` / `1.4x`) while preserving `interactive-widget=` and skipping phones and Desktop Mode (`Antigravity/`).
 
 ## Invariants
 - `[bundle.js:__AG_WEB_OPTIMIZATIONS__]` / `[bundle.js:doc]` The concatenated IIFE executes at most once per `window` and exits early if `window.document` is unavailable.

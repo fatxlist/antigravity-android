@@ -4,7 +4,9 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.net.http.SslError;
+import android.os.Build;
 import android.util.Log;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -191,5 +193,20 @@ public final class AgyWebViewClient extends WebViewClient {
         if (listener != null) {
             listener.onPageFinished(url);
         }
+    }
+
+    @Override
+    public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+        boolean didCrash = false;
+        int priority = -1;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && detail != null) {
+            didCrash = detail.didCrash();
+            priority = detail.rendererPriorityAtExit();
+        }
+        Log.e(TAG, "WebView renderer process gone (didCrash=" + didCrash + ", priority=" + priority + "); recovering");
+        if (listener != null) {
+            listener.onRenderProcessGone(didCrash);
+        }
+        return true;
     }
 }

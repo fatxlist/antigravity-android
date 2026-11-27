@@ -312,11 +312,40 @@ function scheduleScan() {
   }, SCAN_DEBOUNCE_MS);
 }
 
+function onMutations(mutations) {
+  if (state.scanTimer) return;
+  if (!mutations || !mutations.length) {
+    scheduleScan();
+    return;
+  }
+  for (var i = 0; i < mutations.length; i++) {
+    var m = mutations[i];
+    var added = m && m.addedNodes;
+    if (!added || added.length === 0) continue;
+    var target = m.target;
+    if (target && target.closest && target.closest('.prose, pre, code')) {
+      continue;
+    }
+    for (var j = 0; j < added.length; j++) {
+      var node = added[j];
+      if (!node || node.nodeType !== 1) continue;
+      if (node.closest && (node.closest(CONFIG.panel) || node.closest('[role="menu"]'))) {
+        scheduleScan();
+        return;
+      }
+      if (node.querySelector && (node.querySelector(CONFIG.effortGroup) || node.querySelector(CONFIG.panel))) {
+        scheduleScan();
+        return;
+      }
+    }
+  }
+}
+
 function armPanelObserver() {
   var root = document.querySelector(CONFIG.root) || document.body || document.documentElement;
   if (window.MutationObserver && root) {
     if (!state.observer) {
-      state.observer = new MutationObserver(scheduleScan);
+      state.observer = new MutationObserver(onMutations);
     }
     if (!state.observingRoot) {
       try {
@@ -344,7 +373,7 @@ function install() {
   }
 
   if (window.MutationObserver && !state.observer) {
-    state.observer = new MutationObserver(scheduleScan);
+    state.observer = new MutationObserver(onMutations);
   }
 
   scan();

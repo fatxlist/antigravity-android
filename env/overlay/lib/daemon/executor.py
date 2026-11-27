@@ -93,6 +93,20 @@ def redact_secrets(text, extra_secrets=()):
     return s
 
 
+MAX_LOG_BYTES = 512 * 1024
+
+
+def _rotate_log_if_needed():
+    try:
+        if os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) >= MAX_LOG_BYTES:
+            old_log = LOG_FILE + ".old"
+            if os.path.isfile(old_log):
+                os.remove(old_log)
+            os.replace(LOG_FILE, old_log)
+    except OSError:
+        pass
+
+
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     safe_msg = redact_secrets(msg)
@@ -100,6 +114,7 @@ def log(msg):
     print(formatted, flush=True)
     try:
         _ensure_private_dir(CONFIG_DIR)
+        _rotate_log_if_needed()
         fd = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:

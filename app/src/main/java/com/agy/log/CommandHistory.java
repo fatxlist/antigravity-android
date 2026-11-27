@@ -1,8 +1,8 @@
 package com.agy.log;
 
 import org.json.JSONArray;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.LinkedList;
 import java.util.List;
 
 /**
@@ -12,7 +12,7 @@ public final class CommandHistory {
 
     public static final int DEFAULT_CAPACITY = 100;
     private final int capacity;
-    private final LinkedList<CommandRecord> history = new LinkedList<>();
+    private final ArrayDeque<CommandRecord> history;
 
     public CommandHistory() {
         this(DEFAULT_CAPACITY);
@@ -20,6 +20,7 @@ public final class CommandHistory {
 
     public CommandHistory(int capacity) {
         this.capacity = Math.max(10, capacity);
+        this.history = new ArrayDeque<>(this.capacity);
     }
 
     public synchronized void record(CommandRecord record) {
@@ -31,11 +32,18 @@ public final class CommandHistory {
     }
 
     public synchronized List<CommandRecord> getRecent(int maxCount) {
-        int count = Math.min(Math.max(1, maxCount), history.size());
-        int start = history.size() - count;
+        int size = history.size();
+        if (size == 0) {
+            return new ArrayList<>(0);
+        }
+        int count = Math.min(Math.max(1, maxCount), size);
+        int skip = size - count;
         List<CommandRecord> list = new ArrayList<>(count);
-        for (int i = start; i < history.size(); i++) {
-            list.add(history.get(i));
+        int idx = 0;
+        for (CommandRecord r : history) {
+            if (idx++ >= skip) {
+                list.add(r);
+            }
         }
         return list;
     }

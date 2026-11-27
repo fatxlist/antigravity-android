@@ -428,6 +428,38 @@ class TestDaemonExecutor(unittest.TestCase):
         self.assertIn("os._exit(0)", src)
         self.assertNotIn("/data/user/0/com.agy/files", src)
 
+    def test_daemon_log_rotation(self):
+        os.makedirs(executor.CONFIG_DIR, exist_ok=True)
+        old_log = executor.LOG_FILE + ".old"
+        with open(executor.LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("x" * (executor.MAX_LOG_BYTES + 16))
+
+        executor.log("post-rotation entry")
+        self.assertTrue(os.path.isfile(old_log))
+        self.assertGreaterEqual(os.path.getsize(old_log), executor.MAX_LOG_BYTES)
+        with open(executor.LOG_FILE, "r", encoding="utf-8") as f:
+            current = f.read()
+        self.assertIn("post-rotation entry", current)
+        self.assertLess(len(current), 1024)
+
+    def test_scheduler_compute_sleep_seconds(self):
+        now = 1_700_000_005.0
+        # Empty idle state -> 30s max sleep
+        self.assertEqual(scheduler._compute_sleep_seconds([], now, {}), 30.0)
+        # Active user conversation -> 2s fast poll
+        self.assertEqual(
+            scheduler._compute_sleep_seconds([], now, {"working_convos": {"/tmp/t.jsonl"}}),
+            2.0,
+        )
+        # Transcripts exist -> capped at 8s
+        self.assertEqual(
+            scheduler._compute_sleep_seconds([], now, {"brain_paths": ["/tmp/t.jsonl"]}),
+            8.0,
+        )
+        # Imminent delay task -> wakes in ~4s
+        tasks = [{"enabled": True, "trigger": {"type": "delay", "run_at": now + 4.0}}]
+        self.assertAlmostEqual(scheduler._compute_sleep_seconds(tasks, now, {}), 4.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1373,7 +1373,7 @@ function createMockDom() {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Test patch_main.py applies all 3 v2.35.2 hooks idempotently on web/main.js
+// 13. Test patch_main.py applies all 4 v2.35.2 hooks idempotently on web/main.js
 // ---------------------------------------------------------------------------
 {
   const mainJs = path.join(WEB_DIR, 'main.js');
@@ -1385,6 +1385,8 @@ function createMockDom() {
     assert.ok(out1.includes('Patched Desktop Mode toggle'), `Desktop Mode missing in output: ${out1}`);
     assert.ok(out1.includes('Patched Account Switcher'), `Account Switcher missing in output: ${out1}`);
     assert.ok(out1.includes('Patched composer any-file attachments'), `Attachments missing in output: ${out1}`);
+    assert.ok(out1.includes('Disabled desktop sandboxMode'), `Sandbox patch missing in output: ${out1}`);
+    assert.ok(!fs.readFileSync(tmpTarget, 'utf8').includes('sandboxMode:!0'), 'Patched main.js must not contain sandboxMode:!0');
     // Second run must be an idempotent no-op
     const patchedSize = fs.statSync(tmpTarget).size;
     execFileSync('python3', ['-B', path.join(WEB_DIR, 'patch_main.py'), tmpTarget], { encoding: 'utf8' });
@@ -1392,4 +1394,81 @@ function createMockDom() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log('test patch_main.py v2.35.2 hooks & idempotency: OK');
   }
+}
+
+// ---------------------------------------------------------------------------
+// 14. Test bridge.core.js non-idempotent POST handoff grace period
+// ---------------------------------------------------------------------------
+{
+  const makeFetchEnv = (fetchImpl) => {
+    const { windowObj } = createMockDom();
+    windowObj.location = { search: '?port=45123', href: 'https://127.0.0.1:45123/?port=45123' };
+    windowObj.Headers = globalThis.Headers;
+    windowObj.setTimeout = (fn) => { fn(); return 1; };
+    windowObj.fetch = fetchImpl;
+    return windowObj;
+  };
+
+  // 14a. Non-idempotent POST recovers within 4 network-error retries
+  let postAttempts = 0;
+  const windowObj = makeFetchEnv(async (url) => {
+    if (String(url).includes('/SendUserCascadeMessage')) {
+      postAttempts++;
+      if (postAttempts <= 3) throw new Error('ERR_NETWORK_CHANGED');
+      return { status: 200, ok: true };
+    }
+    return { status: 200, ok: true };
+  });
+  const code = fs.readFileSync(path.join(GEN_DIR, 'bridge.core.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  const okResp = await windowObj.fetch('exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
+    method: 'POST',
+    body: '{}',
+  });
+  assert.equal(okResp.status, 200);
+  assert.equal(postAttempts, 4, 'Non-idempotent POST should recover across 3 transient handoff errors');
+
+  // 14b. Persistently failing non-idempotent POST caps at 4 retries (5 total calls)
+  let failAttempts = 0;
+  const env2 = makeFetchEnv(async () => {
+    failAttempts++;
+    throw new Error('ERR_CONNECTION_RESET');
+  });
+  vm.runInNewContext(code, env2);
+  let threw = false;
+  try {
+    await env2.fetch('exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
+      method: 'POST',
+      body: '{}',
+    });
+  } catch (_) {
+    threw = true;
+  }
+  assert.equal(threw, true);
+  assert.equal(failAttempts, 5, 'Persistent non-idempotent POST must stop after 4 retries (5 attempts total)');
+
+  // 14c. Aborted POST fails immediately with 0 retries
+  let abortAttempts = 0;
+  const env3 = makeFetchEnv(async () => {
+    abortAttempts++;
+    const err = new Error('The operation was aborted');
+    err.name = 'AbortError';
+    throw err;
+  });
+  vm.runInNewContext(code, env3);
+  let aborted = false;
+  try {
+    await env3.fetch('exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
+      method: 'POST',
+      body: '{}',
+      signal: { aborted: true },
+    });
+  } catch (_) {
+    aborted = true;
+  }
+  assert.equal(aborted, true);
+  assert.equal(abortAttempts, 1, 'Aborted POST must fail immediately without retrying');
+
+  console.log('test bridge.core.js handoff grace period: OK');
 }

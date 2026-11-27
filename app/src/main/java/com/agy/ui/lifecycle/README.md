@@ -14,7 +14,7 @@ Provides four non-instantiable static helper classes that isolate `MainActivity`
 ## Invariants
 
 - `[AppLifecycle.java:AppLifecycle]`, `[BackNavigator.java:BackNavigator]`, `[PredictiveBackHelper.java:PredictiveBackHelper]`, and `[ThemeRefresher.java:ThemeRefresher]` are all `final` utility classes with private constructors and cannot be instantiated or subclassed.
-- `[AppLifecycle.java:trimMemory]` Schedules `host.freeMemory()` only when `level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE` and `host != null`.
+- `[AppLifecycle.java:trimMemory]` Schedules `host.freeMemory()` on `TRIM_MEMORY_BACKGROUND` (and above), `TRIM_MEMORY_RUNNING_LOW`, or `TRIM_MEMORY_RUNNING_CRITICAL` when `host != null`, throttled by a `5000` ms `SystemClock.uptimeMillis()` cooldown (`TRIM_COOLDOWN_MS`).
 - `[BackNavigator.java:handle]` WebView history navigation (`webView != null && webView.canGoBack()`) takes precedence over exit confirmation, resets `lastRootBackAtMs` to `0`, and returns `true`; single-arg `handle(WebView)` delegates to `handle(null, webView)` without showing a `Toast`.
 - `[BackNavigator.java:BACK_EXIT_WINDOW_MS]` Root back exit requires a second back press within `2000` ms (measured via `SystemClock.elapsedRealtime()`); only then does `handle` reset `lastRootBackAtMs` to `0` and return `false`.
 - `[PredictiveBackHelper.java:register]` Guarded by `activity != null`, `onBack != null`, and `Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU`, returning `null` and swallowing `Throwable` on lower APIs or failures; `[PredictiveBackHelper.java:unregister]` additionally checks `handle instanceof OnBackInvokedCallback` and swallows `Throwable`.

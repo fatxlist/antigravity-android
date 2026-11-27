@@ -2,11 +2,15 @@ package com.agy;
 
 import com.agy.core.CoreEnvironment;
 import com.agy.core.CoreEventWatcher;
+import com.agy.core.CoreLogWriter;
 import com.agy.core.CoreServerService;
 import com.agy.core.VoiceForegroundService;
 import com.agy.gateway.SystemGatewayServer;
 import com.agy.gateway.handlers.DoctorHandler;
+import com.agy.log.CommandHistory;
+import com.agy.log.CommandRecord;
 import com.agy.log.CrashRecorder;
+import com.agy.log.LogRingBuffer;
 import com.agy.oauth.AccountVaultStore;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
@@ -21,6 +25,7 @@ import com.agy.ui.webview.AppHtmlInjector;
 import com.agy.util.AppFileProvider;
 import com.agy.util.DocumentsContractHelper;
 import com.agy.util.HostActivityResolver;
+import com.agy.util.SafPathResolver;
 import com.agy.util.SensitiveDataRedactor;
 
 import org.json.JSONArray;
@@ -29,9 +34,11 @@ import org.json.JSONObject;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -561,6 +568,109 @@ public final class UnitTests {
         }
     }
 
+    private static void testSafPathResolver() throws Exception {
+        check("SafPathResolver numeric", SafPathResolver.isNumericId("359524"));
+        check("SafPathResolver non-numeric msd", !SafPathResolver.isNumericId("msd:123"));
+        check("SafPathResolver non-numeric empty", !SafPathResolver.isNumericId(""));
+        checkEquals("SafPathResolver raw prefix", "/storage/emulated/0/Download/repo",
+                SafPathResolver.stripRawPrefix("raw:/storage/emulated/0/Download/repo"));
+        check("SafPathResolver empty raw returns null", SafPathResolver.stripRawPrefix("raw:  ") == null);
+        checkEquals("SafPathResolver stripLeadingSlashes", "foo/bar",
+                SafPathResolver.stripLeadingSlashes("///foo/bar"));
+
+        File base = createTempTestDir("agy_saf_test_");
+        try {
+            File dlFoo = new File(new File(base, "Download"), "foo");
+            check("mkdir Download/foo", dlFoo.mkdirs());
+            checkEquals("primary candidate resolves existing", dlFoo.getAbsolutePath(),
+                    SafPathResolver.firstExisting(SafPathResolver.candidatesForDocumentId("primary:Download/foo", base)));
+            check("numeric candidate does not fabricate root path",
+                    SafPathResolver.firstExisting(SafPathResolver.candidatesForDocumentId("359524", base)) == null);
+            checkEquals("downloadCandidate with relative path",
+                    new File(new File(base, "Download/sub"), "proj").getPath(),
+                    SafPathResolver.downloadCandidate(base, "Download/sub/", "proj").getPath());
+            checkEquals("downloadCandidate defaults to Download",
+                    new File(new File(base, "Download"), "proj").getPath(),
+                    SafPathResolver.downloadCandidate(base, null, "proj").getPath());
+            check("downloadCandidate rejects traversal",
+                    SafPathResolver.downloadCandidate(base, "../etc", "passwd") == null);
+            check("downloadCandidate rejects slash in name",
+                    SafPathResolver.downloadCandidate(base, "Download", "a/b") == null);
+        } finally {
+            deleteRecursively(base);
+        }
+    }
+
+    private static void testCoreEnvironmentCpuAndSidecars() {
+        CoreEnvironment.CpuFeatures midRange = CoreEnvironment.parseCpuFeatures(
+                "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32\n", true, "qcom", "kona");
+        check("midRange keeps aes/sha1/sha2", midRange.hasAes && midRange.hasSha1 && midRange.hasSha2 && !midRange.hasAtomics);
+        checkEquals("midRange disables only atomics", "arm64.atomics=off", CoreEnvironment.buildArmGodebugFlags(midRange));
+
+        CoreEnvironment.CpuFeatures mt676x = CoreEnvironment.parseCpuFeatures(
+                "Features\t: fp asimd aes\n", true, "mt6765", "k65v1");
+        check("mt676x detected", mt676x.isMt676x);
+        check("mt676x disables cpu.all", CoreEnvironment.buildArmGodebugFlags(mt676x).contains("cpu.all=off"));
+        check("mt676x disables sidecars", !CoreEnvironment.isSidecarsSupported(mt676x, false, 8L * 1024 * 1024 * 1024));
+
+        CoreEnvironment.CpuFeatures flagship = new CoreEnvironment.CpuFeatures(true, true, true, true, true, false, true);
+        check("flagship 6GB enables sidecars", CoreEnvironment.isSidecarsSupported(flagship, false, 5600L * 1024 * 1024));
+        check("4GB device disables sidecars", !CoreEnvironment.isSidecarsSupported(flagship, false, 3800L * 1024 * 1024));
+        check("isLowRamDevice disables sidecars", !CoreEnvironment.isSidecarsSupported(flagship, true, 8L * 1024 * 1024 * 1024));
+    }
+
+    private static void testCoreLogWriterRotation() throws Exception {
+        File tmpDir = createTempTestDir("agy_log_rot_");
+        try {
+            CoreLogWriter.RotatingWriter writer = CoreLogWriter.open(tmpDir, "core.log", 1024L);
+            String chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+            for (int i = 0; i < 30; i++) {
+                CoreLogWriter.writeRedactedLine(writer, i + ":" + chunk, false);
+            }
+            CoreLogWriter.closeQuietly(writer);
+
+            File cur = new File(tmpDir, "logs/core.log");
+            File prev = new File(tmpDir, "logs/core.prev.log");
+            check("core.log exists after rotation", cur.isFile());
+            check("core.prev.log created by in-session rotation", prev.isFile());
+            check("current core.log bounded <= maxBytes", cur.length() <= 1024L);
+        } finally {
+            deleteRecursively(tmpDir);
+        }
+    }
+
+    private static void testCommandHistoryAndLogRingBuffer() {
+        CommandHistory hist = new CommandHistory(10);
+        for (int i = 0; i < 15; i++) {
+            hist.record(new CommandRecord("id-" + i, 1000L + i, "echo " + i, 0, 1L, "", "", "SUCCESS", "test"));
+        }
+        List<CommandRecord> recentCmds = hist.getRecent(3);
+        check("CommandHistory getRecent count == 3", recentCmds.size() == 3);
+        checkEquals("CommandHistory oldest retained in window", "id-12", recentCmds.get(0).id);
+        checkEquals("CommandHistory newest retained", "id-14", recentCmds.get(2).id);
+
+        LogRingBuffer buf = new LogRingBuffer(50);
+        for (int i = 0; i < 65; i++) {
+            buf.append("core", "INFO", "line-" + i);
+        }
+        List<LogRingBuffer.LogEntry> recentLogs = buf.getRecent(4);
+        check("LogRingBuffer getRecent count == 4", recentLogs.size() == 4);
+        checkEquals("LogRingBuffer oldest retained in window", "line-61", recentLogs.get(0).text);
+        checkEquals("LogRingBuffer newest retained", "line-64", recentLogs.get(3).text);
+    }
+
+    private static void testExpandFileChooserMimeTypes() {
+        check("empty acceptTypes returns empty", MainActivity.expandFileChooserMimeTypes(new String[0]).length == 0);
+        List<String> expanded = Arrays.asList(MainActivity.expandFileChooserMimeTypes(new String[]{"image/*", ".md"}));
+        check("keeps image/*", expanded.contains("image/*"));
+        check("adds text/* for skills/docs", expanded.contains("text/*"));
+        check("adds application/json", expanded.contains("application/json"));
+        check("adds application/octet-stream", expanded.contains("application/octet-stream"));
+
+        List<String> wildcard = Arrays.asList(MainActivity.expandFileChooserMimeTypes(new String[]{"*/*"}));
+        check("wildcard keeps */* without redundant extras", wildcard.size() == 1 && "*/*".equals(wildcard.get(0)));
+    }
+
     public static void main(String[] args) throws Exception {
         testGatewayAuth();
         testOAuthTokenStore();
@@ -582,6 +692,11 @@ public final class UnitTests {
         testCrashRecorderPrune();
         testUpdateCheckerHelpers();
         testAccountVaultStore();
+        testSafPathResolver();
+        testCoreEnvironmentCpuAndSidecars();
+        testCoreLogWriterRotation();
+        testCommandHistoryAndLogRingBuffer();
+        testExpandFileChooserMimeTypes();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");
     }
 }

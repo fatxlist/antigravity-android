@@ -14,6 +14,7 @@ import com.agy.util.AtomicFileWriter;
 
 import org.json.JSONObject;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -195,7 +196,7 @@ public final class SystemGatewayServer {
 
     private void handleClient(Socket client) {
         try (Socket sock = client;
-             InputStream in = sock.getInputStream();
+             InputStream in = new BufferedInputStream(sock.getInputStream(), 8192);
              OutputStream out = sock.getOutputStream()) {
 
             String reqLine = readHeaderLine(in);

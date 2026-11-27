@@ -6,6 +6,7 @@ Applies independent, idempotent mobile patches:
 1. Appearance -> Desktop Mode toggle.
 2. Settings -> Accounts & Saved Accounts switcher (`window.__agAccountSwitcher`).
 3. Relaxed chat composer text/code file attachments (`10MB` limit + extra extensions).
+4. Disable desktop `sandboxMode` for Default and Auto permission presets (Android uses Application Sandbox; Linux namespace/seccomp re-exec fails with EINVAL).
 
 If minified signatures shift in a future upstream release, unmatched hooks warn
 and leave the rest untouched so builds never break (`mobile_bridge.js` provides
@@ -408,6 +409,46 @@ def _inject_any_file_attachments(content):
     return patched, changed
 
 
+_SANDBOX_AUTO_ON = 'case "auto":return{sandboxMode:!0'
+_SANDBOX_AUTO_OFF = 'case "auto":return{sandboxMode:!1'
+_SANDBOX_DEFAULT_ON = 'default:return{sandboxMode:!0'
+_SANDBOX_DEFAULT_OFF = 'default:return{sandboxMode:!1'
+
+
+def _disable_desktop_sandbox(content):
+    """Flip Default/Auto presets to sandboxMode:false, returning (content, changed)."""
+    checks = []
+    already_disabled = 0
+    for on, off, name in (
+        (_SANDBOX_AUTO_ON, _SANDBOX_AUTO_OFF, '"auto" preset'),
+        (_SANDBOX_DEFAULT_ON, _SANDBOX_DEFAULT_OFF, 'default preset'),
+    ):
+        on_count = content.count(on)
+        off_count = content.count(off)
+        if on_count == 1 and off_count == 0:
+            checks.append((on, off, name))
+        elif on_count == 0 and off_count >= 1:
+            already_disabled += 1
+        else:
+            print(
+                f"[web-patch] WARNING: sandbox pattern ambiguous/missing for {name} "
+                f"(on={on_count}, off={off_count}); skipping sandbox patch.",
+                file=sys.stderr,
+            )
+            return content, False
+
+    if not checks:
+        if already_disabled == 2:
+            print("[web-patch] Desktop sandboxMode already disabled for Default/Auto presets")
+        return content, False
+
+    patched = content
+    for on, off, name in checks:
+        patched = patched.replace(on, off, 1)
+        print(f"[web-patch] Disabled desktop sandboxMode for {name}")
+    return patched, True
+
+
 def patch_main(file_path):
     if not os.path.isfile(file_path):
         print(f"[web-patch] file not found: {file_path}", file=sys.stderr)
@@ -418,7 +459,12 @@ def patch_main(file_path):
 
     patched = content
     any_changed = False
-    for fn in (_inject_desktop_mode, _inject_account_switcher, _inject_any_file_attachments):
+    for fn in (
+        _inject_desktop_mode,
+        _inject_account_switcher,
+        _inject_any_file_attachments,
+        _disable_desktop_sandbox,
+    ):
         patched, did = fn(patched)
         any_changed = any_changed or did
 

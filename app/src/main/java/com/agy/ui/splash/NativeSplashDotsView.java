@@ -22,6 +22,7 @@ import com.agy.R;
 public class NativeSplashDotsView extends View {
 
     private final Paint logoPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final RectF destRect = new RectF();
     private ValueAnimator pulseAnimator;
     private ValueAnimator entranceAnimator;
 
@@ -145,6 +146,16 @@ public class NativeSplashDotsView extends View {
         }
     }
 
+    public void releaseResources() {
+        stopAnimation();
+        if (logoBitmap != null) {
+            if (!logoBitmap.isRecycled()) {
+                logoBitmap.recycle();
+            }
+            logoBitmap = null;
+        }
+    }
+
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         float totalSize = logoSizePx + getPaddingLeft() + getPaddingRight();
@@ -166,7 +177,7 @@ public class NativeSplashDotsView extends View {
 
         float logoLeft = centerX - (logoSizePx / 2f);
         float logoTop = centerY - (logoSizePx / 2f);
-        RectF destRect = new RectF(logoLeft, logoTop, logoLeft + logoSizePx, logoTop + logoSizePx);
+        destRect.set(logoLeft, logoTop, logoLeft + logoSizePx, logoTop + logoSizePx);
 
         float currentAlpha = Math.max(0f, Math.min(1f, entranceAlpha * pulseAlpha));
         logoPaint.setAlpha(Math.round(255 * currentAlpha));

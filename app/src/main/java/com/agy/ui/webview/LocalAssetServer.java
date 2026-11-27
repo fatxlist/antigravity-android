@@ -22,6 +22,8 @@ import java.util.Map;
 public final class LocalAssetServer {
 
     private static final String TAG = "WebViewHost";
+    private static final int MIN_BUF_BYTES = 4 * 1024;
+    private static final int MAX_BUF_BYTES = 64 * 1024;
 
     private static final class WebRoot {
         final File filesDir;
@@ -72,6 +74,9 @@ public final class LocalAssetServer {
                 || path.contains("connect-websocket")) {
             return null;
         }
+        if (path.contains("..") || path.indexOf('\0') >= 0) {
+            return null;
+        }
         WebRoot root = resolveWebRoot(context);
         if (root == null) {
             return null;
@@ -88,10 +93,11 @@ public final class LocalAssetServer {
             return null;
         }
         if (target.isFile() && target.canRead()) {
+            long len = target.length();
             try {
                 String mime = MimeTypes.getMimeType(target.getName());
                 String encoding = MimeTypes.isTextMime(mime) ? "UTF-8" : null;
-                Map<String, String> headers = new HashMap<>();
+                Map<String, String> headers = new HashMap<>(4);
                 headers.put("Access-Control-Allow-Origin", "*");
                 String versionParam = uri.getQueryParameter("v");
                 // Versioned asset URLs (?v=...) allow Chromium/V8 to persist compiled bytecode cache across restarts.
@@ -99,8 +105,9 @@ public final class LocalAssetServer {
                         (versionParam != null && !versionParam.isEmpty())
                                 ? "public, max-age=31536000, immutable"
                                 : "no-cache");
-                headers.put("Content-Length", String.valueOf(target.length()));
-                InputStream bis = new BufferedInputStream(new FileInputStream(target), 64 * 1024);
+                headers.put("Content-Length", String.valueOf(len));
+                int bufSize = (int) Math.min(MAX_BUF_BYTES, Math.max(MIN_BUF_BYTES, len));
+                InputStream bis = new BufferedInputStream(new FileInputStream(target), bufSize);
                 return new WebResourceResponse(mime, encoding, 200, "OK", headers, bis);
             } catch (Exception e) {
                 Log.w(TAG, "intercept failed for " + path, e);

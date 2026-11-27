@@ -16,11 +16,13 @@ import java.io.File;
 public final class NetworkConfigWriter {
 
     private static final String TAG = "NetworkConfigWriter";
+    private static final String HOSTS_CONTENT = "127.0.0.1 localhost\n::1 localhost\n";
+    private static volatile String lastResolvContent = null;
 
     private NetworkConfigWriter() {
     }
 
-    public static void write(Context appContext) {
+    public static synchronized void write(Context appContext) {
         File etc = new File(appContext.getFilesDir(), "etc");
         if (!etc.exists() && !etc.mkdirs()) {
             Log.w(TAG, "cannot create " + etc);
@@ -31,7 +33,19 @@ public final class NetworkConfigWriter {
         for (String ip : DnsCollector.collectDnsServers(appContext)) {
             resolv.append("nameserver ").append(ip).append('\n');
         }
-        AtomicFileWriter.writeText(new File(etc, "resolv.conf"), resolv.toString());
-        AtomicFileWriter.writeText(new File(etc, "hosts"), "127.0.0.1 localhost\n");
+        String resolvContent = resolv.toString();
+        File resolvFile = new File(etc, "resolv.conf");
+        File hostsFile = new File(etc, "hosts");
+        if (resolvContent.equals(lastResolvContent)
+                && resolvFile.isFile()
+                && hostsFile.isFile()
+                && hostsFile.length() > 0) {
+            return;
+        }
+        AtomicFileWriter.writeText(resolvFile, resolvContent);
+        if (!hostsFile.isFile() || hostsFile.length() == 0) {
+            AtomicFileWriter.writeText(hostsFile, HOSTS_CONTENT);
+        }
+        lastResolvContent = resolvContent;
     }
 }

@@ -64,7 +64,9 @@ public final class WebSettingsFactory {
             defaultUserAgent = settings.getUserAgentString();
         }
         settings.setUserAgentString(desktop ? DESKTOP_UA : defaultUserAgent);
-        settings.setUseWideViewPort(desktop);
-        settings.setLoadWithOverviewMode(desktop);
+        // Always honour <meta name="viewport"> so tablet-scale.js can narrow the layout viewport
+        // via width + initial-scale on tablets while keeping phones at device-width / 1.0.
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
     }
 }

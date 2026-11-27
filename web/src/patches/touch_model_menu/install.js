@@ -12,7 +12,7 @@ function install() {
   }
 
   if (window.MutationObserver && !state.observer) {
-    state.observer = new MutationObserver(scheduleScan);
+    state.observer = new MutationObserver(onMutations);
   }
 
   scan();

@@ -38,6 +38,13 @@ public final class WebViewFactory {
 
         WebSettingsFactory.configure(view);
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
+            } catch (Throwable ignored) {
+            }
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
         }

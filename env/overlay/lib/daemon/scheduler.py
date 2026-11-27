@@ -21,6 +21,7 @@ from .executor import (
     execute_action_async,
     HOME,
     PID_FILE,
+    TASKS_FILE,
     STOP_EVENT,
 )
 from .triggers import (
@@ -327,18 +328,67 @@ def matches_cron(cron_expr, dt=None):
     return True
 
 
+def _compute_sleep_seconds(tasks, now, watcher_state=None):
+    """Compute an adaptive sleep interval so idle daemons wake infrequently."""
+    if watcher_state and watcher_state.get("working_convos"):
+        return 2.0
+    wait_sec = 30.0
+    if watcher_state and watcher_state.get("brain_paths"):
+        # Cap idle poll at 8s when transcripts exist so turn-complete alerts stay timely.
+        wait_sec = 8.0
+    for task in tasks:
+        if not task.get("enabled", True):
+            continue
+        trigger = task.get("trigger", {})
+        ttype = trigger.get("type", "delay")
+        if ttype in ("once", "delay"):
+            rem = max(1.0, float(trigger.get("run_at", 0)) - now)
+            wait_sec = min(wait_sec, rem)
+        elif ttype == "interval":
+            interval = float(trigger.get("interval_sec", 300))
+            last_run = float(trigger.get("last_run", 0))
+            rem = max(1.0, (last_run + interval) - now)
+            wait_sec = min(wait_sec, rem)
+        elif ttype == "cron":
+            rem = max(2.0, 61.0 - (now % 60.0))
+            wait_sec = min(wait_sec, rem)
+        elif ttype in ("watch_file", "github_pr", "github_issue", "battery"):
+            default_iv = 15 if ttype == "watch_file" else 180
+            interval = float(trigger.get("interval_sec", default_iv))
+            last_check = float(trigger.get("last_check_ts", 0))
+            rem = max(1.0, (last_check + interval) - now)
+            wait_sec = min(wait_sec, rem)
+    return max(2.0, min(30.0, wait_sec))
+
+
 def daemon_loop():
     """Main scheduler ticking loop."""
     log("Antigravity background micro-daemon loop started (with DNS guard & turn notifier).")
     webhook_threads = {}
     watcher_state = {}
+    cached_tasks = []
+    cached_stat = None
+    sleep_sec = 5.0
 
     while not STOP_EVENT.is_set():
         try:
             _guard_resolv_conf(watcher_state)
             _check_conversation_turns(watcher_state)
 
-            tasks = load_tasks()
+            try:
+                st = os.stat(TASKS_FILE)
+                stat_sig = (getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
+            except OSError:
+                stat_sig = None
+
+            if stat_sig is None:
+                cached_tasks = []
+                cached_stat = None
+            elif stat_sig != cached_stat:
+                cached_tasks = load_tasks()
+                cached_stat = stat_sig
+
+            tasks = cached_tasks
             now = time.time()
             now_dt = datetime.now()
             changed = False
@@ -424,25 +474,17 @@ def daemon_loop():
 
             if changed:
                 save_tasks(tasks)
+                try:
+                    st = os.stat(TASKS_FILE)
+                    cached_stat = (getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), st.st_size)
+                except OSError:
+                    cached_stat = None
 
-            fast_poll = bool(watcher_state.get("working_convos"))
-            if not fast_poll:
-                for task in tasks:
-                    if not task.get("enabled", True):
-                        continue
-                    trig = task.get("trigger", {})
-                    ttype = trig.get("type", "delay")
-                    if ttype == "watch_file" or (
-                        ttype in ("interval", "github_pr", "github_issue", "battery")
-                        and trig.get("interval_sec", 300) <= 15
-                    ):
-                        fast_poll = True
-                        break
-            sleep_sec = 2 if fast_poll else 8
+            sleep_sec = _compute_sleep_seconds(tasks, now, watcher_state)
 
         except Exception as e:
             log(f"Daemon scheduler error: {e}")
-            sleep_sec = 2
+            sleep_sec = 5.0
 
         STOP_EVENT.wait(sleep_sec)
     try:

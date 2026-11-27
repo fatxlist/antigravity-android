@@ -38,6 +38,16 @@ for f in "$TMP"/web/generated/boot/*.js "$TMP"/web/generated/patches/*.js; do
     fi
 done
 
+# Android has no desktop sandboxing: no permission preset in the patched
+# bundle may enable it, or every first run_command fails with EINVAL.
+if grep -Fq 'sandboxMode:!0' "$TMP/web/generated/main.js"; then
+    echo "generated main.js still enables desktop sandboxMode" >&2
+    exit 1
+fi
+
+python3 -B "$ROOT/web/tests/test_patch_main_sandbox.py"
+python3 -B "$ROOT/web/tests/test_tablet_scale.py"
+
 if command -v node >/dev/null 2>&1 && [ -f "$TMP/web/tests/test_web_patches.mjs" ]; then
     node "$TMP/web/tests/test_web_patches.mjs"
 fi

@@ -58,7 +58,11 @@ function installFetchRewrite() {
   var schedule = typeof origSetTimeout === 'function' ? origSetTimeout : setTimeout;
 
   function fetchWithStartupRetry(u, opts, retries, isStream) {
-    var attempts = isRetrySafeCall(u, opts, isStream) ? retries : 0;
+    var safeCall = isRetrySafeCall(u, opts, isStream);
+    // Allow a brief grace period (up to 4 network retries @ 400ms) for non-idempotent
+    // calls across Wi-Fi <-> cellular handoffs; never retry aborted calls or HTTP errors.
+    var attempts = safeCall ? retries : Math.min(retries, 4);
+    var retryDelay = safeCall ? 120 : 400;
     var doCall = (isStream && typeof wrapStreamingFetch === 'function')
       ? function () { return wrapStreamingFetch(origFetch, u, opts); }
       : function () { return origFetch(u, opts); };
@@ -73,7 +77,7 @@ function installFetchRewrite() {
         return new Promise(function (resolve) {
           schedule(function () {
             resolve(fetchWithStartupRetry(u, opts, attempts - 1, isStream));
-          }, 120);
+          }, retryDelay);
         });
       }
       if (typeof notifyNetworkFailure === 'function') notifyNetworkFailure();

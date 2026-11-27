@@ -142,7 +142,9 @@ public final class RuntimeManager {
         cmd.add(RuntimePaths.APP_DATA_DIR_NAME);
         cmd.add("--web_bundle_path");
         cmd.add(getWebDir().getAbsolutePath());
-        cmd.add("--enable_sidecars");
+        if (CoreEnvironment.isSidecarsSupported(appContext)) {
+            cmd.add("--enable_sidecars");
+        }
 
         return cmd.toArray(new String[0]);
     }

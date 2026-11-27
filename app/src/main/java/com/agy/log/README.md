@@ -18,7 +18,7 @@ Provides thread-safe in-memory FIFO ring buffers for command execution telemetry
 - `CrashRecorder.recordCrash` synchronizes on `CrashRecorder.class`, publishes via `volatile latestCrash` for lock-free `getLatestCrash()`, redacts `errorDescription` and up to 50 `log_tail` lines via `LogRedactor.redact` (omitting `log_tail` if `logBuffer == null`), reports memory and storage in integer MiB, persists UTF-8 JSON (2-space indent) strictly to `<filesDir>/logs/crashes/crash_<timestamp>.json`, prunes excess `crash_*` files via `pruneOldReports(crashesDir, MAX_CRASH_REPORTS)` (retaining the newest 10 by `lastModified`), and catches `Exception` without throwing `[CrashRecorder.java:recordCrash]` `[CrashRecorder.java:latestCrash]` `[CrashRecorder.java:getLatestCrash]` `[CrashRecorder.java:persistReport]` `[CrashRecorder.java:pruneOldReports]`
 
 ## Side Effects
-- Mutates bounded in-memory `LinkedList` state in `CommandHistory` and `LogRingBuffer` (reading `System.currentTimeMillis()` on `append`/`appendLine`) `[CommandHistory.java:record]` `[LogRingBuffer.java:append]` `[LogRingBuffer.java:appendLine]`
+- Mutates bounded in-memory `ArrayDeque` state in `CommandHistory` and `LogRingBuffer` (reading `System.currentTimeMillis()` on `append`/`appendLine`) `[CommandHistory.java:record]` `[LogRingBuffer.java:append]` `[LogRingBuffer.java:appendLine]`
 - Updates static `CrashRecorder.latestCrash`, queries JVM `Runtime` memory and `filesDir` usable/total disk space, creates `<filesDir>/logs/crashes` if absent, writes `crash_<timestamp>.json` to disk, and logs via `Log.i` / `Log.w` under tag `"CrashRecorder"` `[CrashRecorder.java:recordCrash]` `[CrashRecorder.java:persistReport]` `[CrashRecorder.java:TAG]`
 
 ## Verification

@@ -31,6 +31,7 @@ bundle iife patches/web_optimizations.js
 src/patches/web_optimizations/bundle.js
 src/patches/web_optimizations/bidi.js
 src/patches/web_optimizations/viewport.js
+src/patches/web_optimizations/tablet-scale.js
 
 bundle iife patches/touch_model_menu.js
 src/patches/touch_model_menu/config.js

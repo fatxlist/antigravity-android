@@ -15,8 +15,13 @@ public final class WakeLockHolder {
         try {
             PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "agy::core");
-                wakeLock.acquire();
+                if (wakeLock == null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "agy::core");
+                    wakeLock.setReferenceCounted(false);
+                }
+                if (!wakeLock.isHeld()) {
+                    wakeLock.acquire();
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "wakelock failed", e);

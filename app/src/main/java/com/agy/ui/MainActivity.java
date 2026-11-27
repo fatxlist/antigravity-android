@@ -102,6 +102,7 @@ public class MainActivity extends Activity
     private boolean activityResumed = false;
     private boolean webViewPaused = false;
     private boolean awaitingStorageSettingsReturn = false;
+    private boolean destroying = false;
     private int loadedGeneration = -1;
     private long splashDeadline;
     private String pendingCascadeId;
@@ -112,7 +113,7 @@ public class MainActivity extends Activity
     private final Runnable splashWatchdog = new Runnable() {
         @Override
         public void run() {
-            if (appLoaded && splash != null && !splash.isFatalShown()) {
+            if (!destroying && appLoaded && splash != null && !splash.isFatalShown()) {
                 Log.w(TAG, "watchdog: auto-dismissing splash after timeout");
                 dismissSplash();
             }
@@ -427,6 +428,67 @@ public class MainActivity extends Activity
         pageFinished = true;
         if (lastInsets != null) {
             pushSafeAreaInsetsToJs(lastInsets, true);
+        }
+    }
+
+    @Override
+    public void onRenderProcessGone(boolean didCrash) {
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (destroying || isFinishing()) {
+                    return;
+                }
+                Log.w(TAG, "Recreating WebView after renderer termination (didCrash=" + didCrash + ")");
+                handler.removeCallbacks(splashWatchdog);
+                handler.removeCallbacks(splashDeadlineTask);
+                if (webViewHost != null) {
+                    webViewHost.cancelPendingPermissions();
+                    WebView old = webViewHost.getWebView();
+                    if (old != null) {
+                        if (contentColumn != null) {
+                            contentColumn.removeView(old);
+                        }
+                        destroyWebViewInstance(old);
+                    }
+                }
+                webViewHost = new WebViewHost(MainActivity.this, themeManager, oauthManager,
+                        androidBridge, MainActivity.this, MainActivity.this);
+                webViewHost.setListener(MainActivity.this);
+                WebView newWebView = webViewHost.getWebView();
+                newWebView.setFitsSystemWindows(false);
+                if (contentColumn != null) {
+                    contentColumn.addView(newWebView, 0,
+                            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
+                    contentColumn.requestApplyInsets();
+                }
+                appLoaded = false;
+                pageFinished = false;
+                uiReady = false;
+                webViewPaused = false;
+                loadedGeneration = -1;
+                lastPushedSafeAreaKey = null;
+                splashDeadline = System.currentTimeMillis() + SPLASH_TIMEOUT_MS;
+                if (splash != null) {
+                    splash.showLoading();
+                }
+                watchCore();
+            }
+        });
+    }
+
+    private static void destroyWebViewInstance(WebView wv) {
+        if (wv == null) {
+            return;
+        }
+        try {
+            wv.stopLoading();
+            wv.setWebChromeClient(null);
+            wv.setWebViewClient(null);
+            wv.setDownloadListener(null);
+            wv.destroy();
+        } catch (Exception e) {
+            Log.w(TAG, "error destroying webView", e);
         }
     }
 
@@ -774,11 +836,13 @@ public class MainActivity extends Activity
 
     @Override
     protected void onDestroy() {
+        destroying = true;
         activityResumed = false;
         uiReady = false;
         CoreRuntimeState.removeStateListener(coreStateListener);
         handler.removeCallbacks(coreWatchTask);
         handler.removeCallbacks(splashDeadlineTask);
+        handler.removeCallbacks(splashWatchdog);
         dismissLocalPreview();
         if (voiceDictation != null) {
             voiceDictation.destroy();
@@ -814,18 +878,7 @@ public class MainActivity extends Activity
         }
         if (webViewHost != null) {
             webViewHost.cancelPendingPermissions();
-            WebView wv = webViewHost.getWebView();
-            if (wv != null) {
-                try {
-                    wv.stopLoading();
-                    wv.setWebChromeClient(null);
-                    wv.setWebViewClient(null);
-                    wv.setDownloadListener(null);
-                    wv.destroy();
-                } catch (Exception e) {
-                    Log.w(TAG, "error destroying webView", e);
-                }
-            }
+            destroyWebViewInstance(webViewHost.getWebView());
         }
         super.onDestroy();
     }
@@ -1015,6 +1068,55 @@ public class MainActivity extends Activity
         }
     }
 
+    /**
+     * Normalizes WebView acceptTypes and expands restrictive filters so users can
+     * always attach markdown, JSON, YAML, and skill/documentation files.
+     */
+    public static String[] expandFileChooserMimeTypes(String[] acceptTypes) {
+        if (acceptTypes == null || acceptTypes.length == 0) {
+            return new String[0];
+        }
+        java.util.LinkedHashSet<String> mimes = new java.util.LinkedHashSet<>();
+        boolean hasAny = false;
+        boolean hasWildcard = false;
+        for (String raw : acceptTypes) {
+            if (raw == null) {
+                continue;
+            }
+            for (String part : raw.split(",")) {
+                String type = part.trim();
+                if (type.isEmpty()) {
+                    continue;
+                }
+                hasAny = true;
+                if ("*/*".equals(type)) {
+                    hasWildcard = true;
+                }
+                if (type.contains("/")) {
+                    mimes.add(type);
+                } else if (type.startsWith(".")) {
+                    String lower = type.toLowerCase(java.util.Locale.US);
+                    if (".json".equals(lower)) {
+                        mimes.add("application/json");
+                    } else if (".md".equals(lower) || ".markdown".equals(lower)
+                            || ".txt".equals(lower) || ".yaml".equals(lower)
+                            || ".yml".equals(lower)) {
+                        mimes.add("text/*");
+                    }
+                }
+            }
+        }
+        if (!hasAny) {
+            return new String[0];
+        }
+        if (!hasWildcard) {
+            mimes.add("text/*");
+            mimes.add("application/json");
+            mimes.add("application/octet-stream");
+        }
+        return mimes.toArray(new String[0]);
+    }
+
     @Override
     public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback,
                                       WebChromeClient.FileChooserParams fileChooserParams) {
@@ -1025,12 +1127,19 @@ public class MainActivity extends Activity
         this.filePathCallback = callback;
 
         Intent chooserIntent = null;
+        String[] expandedMimes = fileChooserParams != null
+                ? expandFileChooserMimeTypes(fileChooserParams.getAcceptTypes())
+                : new String[0];
 
         // 1. Try standard intent built by Chromium WebChromeClient
         if (fileChooserParams != null) {
             try {
                 Intent defaultIntent = fileChooserParams.createIntent();
                 if (defaultIntent != null) {
+                    if (expandedMimes.length > 0) {
+                        defaultIntent.setType("*/*");
+                        defaultIntent.putExtra(Intent.EXTRA_MIME_TYPES, expandedMimes);
+                    }
                     chooserIntent = Intent.createChooser(defaultIntent, "Select Media / Files");
                 }
             } catch (Throwable t) {
@@ -1043,22 +1152,12 @@ public class MainActivity extends Activity
             Intent contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
             contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
             contentIntent.setType("*/*");
-            if (fileChooserParams != null) {
-                String[] acceptTypes = fileChooserParams.getAcceptTypes();
-                if (acceptTypes != null && acceptTypes.length > 0) {
-                    List<String> validMimes = new ArrayList<>();
-                    for (String type : acceptTypes) {
-                        if (type != null && type.contains("/")) {
-                            validMimes.add(type.trim());
-                        }
-                    }
-                    if (!validMimes.isEmpty()) {
-                        contentIntent.putExtra(Intent.EXTRA_MIME_TYPES, validMimes.toArray(new String[0]));
-                    }
-                }
-                if (fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
-                    contentIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-                }
+            if (expandedMimes.length > 0) {
+                contentIntent.putExtra(Intent.EXTRA_MIME_TYPES, expandedMimes);
+            }
+            if (fileChooserParams != null
+                    && fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                contentIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
             }
             chooserIntent = Intent.createChooser(contentIntent, "Select Media / Files");
         }

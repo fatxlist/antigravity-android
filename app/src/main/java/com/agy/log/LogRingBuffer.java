@@ -4,8 +4,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.LinkedList;
 import java.util.List;
 
 /**
@@ -42,7 +42,7 @@ public final class LogRingBuffer {
     }
 
     private final int capacity;
-    private final LinkedList<LogEntry> buffer = new LinkedList<>();
+    private final ArrayDeque<LogEntry> buffer;
 
     public LogRingBuffer() {
         this(DEFAULT_CAPACITY);
@@ -50,6 +50,7 @@ public final class LogRingBuffer {
 
     public LogRingBuffer(int capacity) {
         this.capacity = Math.max(50, capacity);
+        this.buffer = new ArrayDeque<>(this.capacity);
     }
 
     public synchronized void append(String channel, String level, String text) {
@@ -76,11 +77,18 @@ public final class LogRingBuffer {
     }
 
     public synchronized List<LogEntry> getRecent(int maxCount) {
-        int count = Math.min(Math.max(1, maxCount), buffer.size());
-        int start = buffer.size() - count;
+        int size = buffer.size();
+        if (size == 0) {
+            return new ArrayList<>(0);
+        }
+        int count = Math.min(Math.max(1, maxCount), size);
+        int skip = size - count;
         List<LogEntry> result = new ArrayList<>(count);
-        for (int i = start; i < buffer.size(); i++) {
-            result.add(buffer.get(i));
+        int idx = 0;
+        for (LogEntry entry : buffer) {
+            if (idx++ >= skip) {
+                result.add(entry);
+            }
         }
         return result;
     }

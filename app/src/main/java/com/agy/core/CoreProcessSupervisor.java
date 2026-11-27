@@ -5,6 +5,7 @@ import android.system.Os;
 import android.text.TextUtils;
 import android.util.Log;
 
+import com.agy.BuildConfig;
 import com.agy.gateway.SystemGatewayServer;
 import com.agy.runtime.RuntimeManager;
 import com.agy.util.CoreUrl;
@@ -19,7 +20,6 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
-import java.io.Writer;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 
@@ -99,7 +99,7 @@ public final class CoreProcessSupervisor {
         int attempt = 0;
         while (!stopping) {
             clearCoreStateFile(appContext.getFilesDir());
-            Writer log = CoreLogWriter.open(appContext.getFilesDir());
+            CoreLogWriter.RotatingWriter log = CoreLogWriter.open(appContext.getFilesDir());
             try {
                 CoreRuntimeState.lastError = null;
                 CoreRuntimeState.restarting = false;
@@ -107,7 +107,7 @@ public final class CoreProcessSupervisor {
                 Process proc = CoreLauncher.launch(runtime, appContext.getFilesDir());
                 process = proc;
 
-                final Writer streamWriter = log;
+                final CoreLogWriter.RotatingWriter streamWriter = log;
                 Thread streamer = new Thread(() -> streamLog(proc, streamWriter), "CoreStreamThread");
                 streamer.setDaemon(true);
                 streamer.start();
@@ -185,7 +185,7 @@ public final class CoreProcessSupervisor {
         }
     }
 
-    private boolean waitForReady(Process proc, Writer log) {
+    private boolean waitForReady(Process proc, CoreLogWriter.RotatingWriter log) {
         long start = System.currentTimeMillis();
         String csrf = runtime.getCsrfToken();
         int port = CoreRuntimeState.httpsPort;
@@ -221,13 +221,15 @@ public final class CoreProcessSupervisor {
         return false;
     }
 
-    private void streamLog(Process proc, Writer log) {
+    private void streamLog(Process proc, CoreLogWriter.RotatingWriter log) {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(proc.getInputStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 String safeLine = SensitiveDataRedactor.redactLine(line);
-                Log.d(TAG, safeLine);
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, safeLine);
+                }
                 if (logBuffer != null) {
                     logBuffer.appendLine(safeLine);
                 }

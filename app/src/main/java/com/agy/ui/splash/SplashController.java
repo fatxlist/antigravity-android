@@ -194,7 +194,7 @@ public final class SplashController {
         } catch (Throwable ignored) {
         }
         try {
-            nativeDotsView.stopAnimation();
+            nativeDotsView.releaseResources();
         } catch (Throwable ignored) {
         }
         destroyErrorWebView();

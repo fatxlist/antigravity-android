@@ -20,6 +20,9 @@ public final class WebViewHost {
 
     public interface Listener {
         void onPageFinished(String url);
+
+        default void onRenderProcessGone(boolean didCrash) {
+        }
     }
 
     private final Context context;
@@ -48,6 +51,13 @@ public final class WebViewHost {
             public void onPageFinished(String url) {
                 if (WebViewHost.this.listener != null) {
                     WebViewHost.this.listener.onPageFinished(url);
+                }
+            }
+
+            @Override
+            public void onRenderProcessGone(boolean didCrash) {
+                if (WebViewHost.this.listener != null) {
+                    WebViewHost.this.listener.onRenderProcessGone(didCrash);
                 }
             }
         }));

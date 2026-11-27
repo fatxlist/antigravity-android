@@ -1,3 +1,31 @@
+# Antigravity for Android v2.6.1
+
+## Спецификация пакетов релиза
+
+| Файл пакета | Идентификатор приложения | Порт рантайма | Описание |
+| :--- | :--- | :--- | :--- |
+| **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с нативным Bionic-рантаймом, ядром `v2.35.2`, Rust-утилитой `agy`, исправлениями SAF/планшетов и оптимизациями для средних устройств. |
+| **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
+
+---
+
+## Новые возможности и улучшения (v2.6.1)
+
+* **Нативный бинарник `agy` (Rust) и защита окружения:**
+  * Добавлен многофункциональный Rust-бинарник `agy` для `agy-fix-paths` и `agy-notify` (с резервным fallback и однопроходной фильтрацией).
+  * Усилена изоляция резервных копий `agy-upgrade` и права доступа файлов демона `agy-daemon`.
+* **Исправление `sandboxMode` для пресетов `Default` и `Auto` (`web/patch_main.py`):** отключён desktop `sandboxMode` (`sandboxMode:!1`), устранявший падение первого `run_command` с `fork/exec .../libloader.so: invalid argument` под Android SELinux.
+* **Поддержка папок «Загрузки» в SAF (`SafPathResolver` + `DocumentsContractHelper`):** корректное разрешение числовых и `msd:` идентификаторов `com.android.providers.downloads.documents` через `ContentResolver` (`_data`, MediaStore API 29+ и `COLUMN_DISPLAY_NAME` в `Download/`).
+* **Масштабирование интерфейса на планшетах (`tablet-scale.js` + `WebSettingsFactory`):** адаптивное сужение layout viewport через `<meta name="viewport">` (`1.2x` / `1.3x` / `1.4x` от `600px+` с сохранением `interactive-widget=resizes-content`), без затрагивания смартфонов и Desktop Mode.
+* **Оптимизации для средних устройств и долгих сессий:**
+  * Гранулярное определение ARMv8-расширений в `CoreEnvironment` (`parseCpuFeatures`, `buildArmGodebugFlags`, `asyncpreemptoff=1`) и отключение `--enable_sidecars` на бюджетных SoC/MT676x и устройствах с `< 4200 MiB` RAM.
+  * Внутрисессионная ротация `core.log` (`CoreLogWriter.RotatingWriter`) и `daemon.log` (512 KB), переход `CommandHistory`/`LogRingBuffer` на `ArrayDeque`, буферизация `SystemGatewayServer` (`BufferedInputStream`), кэширование и debounce DNS (`NetworkConfigWriter`/`NetworkMonitorHolder`), адаптивный сон `agy-daemon` (`_compute_sleep_seconds`) и stat-кэш `tasks.json`.
+  * Устойчивость WebView: `RENDERER_PRIORITY_BOUND`, автоматическое пересоздание WebView при `onRenderProcessGone`, cooldown для `trimMemory`, освобождение битмапа сплэша (`NativeSplashDotsView.releaseResources`), фильтрация мутаций в `touch_model_menu` и отключение `backdrop-filter` на `.surface-glass`.
+* **Расширенные загрузки и смена сети:** расширение фильтров `onShowFileChooser` (`MainActivity.expandFileChooserMimeTypes`) для удобного выбора `.md`, `.json`, `.yaml` и навыков, а также grace-период (до 4 повторов при сетевой ошибке) для POST-запросов в `fetch-rewrite.js` при переключении Wi-Fi ↔ LTE.
+* **Автоматизация CI:** добавлен workflow `.github/workflows/sync-core.yml` (`workflow_dispatch`) для скачивания, перепаковки и проверки обновлений `language_server` с открытием PR.
+
+---
+
 # Antigravity for Android v2.6.0
 
 ## Спецификация пакетов релиза

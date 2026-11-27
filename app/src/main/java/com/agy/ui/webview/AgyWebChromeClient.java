@@ -63,10 +63,15 @@ public final class AgyWebChromeClient extends WebChromeClient {
     @Override
     public boolean onConsoleMessage(ConsoleMessage cm) {
         if (cm != null) {
+            ConsoleMessage.MessageLevel lvl = cm.messageLevel();
+            if (!com.agy.BuildConfig.DEBUG
+                    && lvl != ConsoleMessage.MessageLevel.ERROR
+                    && lvl != ConsoleMessage.MessageLevel.WARNING) {
+                return true;
+            }
             String msg = SensitiveDataRedactor.redactLine(cm.message());
             String src = SensitiveDataRedactor.safeUrl(cm.sourceId());
             int line = cm.lineNumber();
-            ConsoleMessage.MessageLevel lvl = cm.messageLevel();
             String tag = "AGY_JS";
             if (lvl == ConsoleMessage.MessageLevel.ERROR) {
                 Log.e(tag, "[" + src + ":" + line + "] " + msg);
