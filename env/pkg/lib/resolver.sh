@@ -48,6 +48,10 @@ EOF
 # resolve NAME... -> complete install order, dependencies first. Fails closed
 # for invalid names, unresolved dependencies, and cycles; no partial order leaks.
 resolve() {
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" resolve "$PKG_INDEX" "$PKG_DB" "$@"
+        return $?
+    fi
     local work="$PKG_ROOT/tmp/resolve.$$" name entry line provider rootname failed=0 tab=$'\t'
     rm -rf "$work"; mkdir -p "$work"
     for name in "$@"; do

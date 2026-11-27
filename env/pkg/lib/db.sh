@@ -49,6 +49,10 @@ db_sync_dpkg() {
     local status="${PREFIX}/var/lib/dpkg/status"
     [ -f "$status" ] || return 0
     ensure_dirs
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" sync-dpkg "$PREFIX" "$PKG_DB"
+        return $?
+    fi
     local pkg="" ver="" arch=""
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in

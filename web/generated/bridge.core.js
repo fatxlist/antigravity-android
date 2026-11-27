@@ -319,9 +319,93 @@ var activeStreamClosers = new Set();
 var lastResumeTs = 0;
 var lastHostResumeTs = 0;
 var pendingVisibilityTimer = null;
+var reconnectTimer = null;
+var reconnectHideTimer = null;
+var reconnectAttempt = 0;
+var MAX_RECONNECT_ATTEMPTS = 12;
+var INITIAL_RECONNECT_MS = 1500;
+var MAX_RECONNECT_MS = 12000;
 
 var origSetTimeout = typeof global.setTimeout === 'function' ? global.setTimeout.bind(global) : setTimeout;
 var origClearTimeout = typeof global.clearTimeout === 'function' ? global.clearTimeout.bind(global) : clearTimeout;
+
+function updateNetBanner(mode, text) {
+  try {
+    var d = global.document;
+    var root = d && (d.body || d.documentElement);
+    if (!d || !root || typeof d.getElementById !== 'function') return;
+    if (reconnectHideTimer) {
+      try { origClearTimeout(reconnectHideTimer); } catch (_) {}
+      reconnectHideTimer = null;
+    }
+    var banner = d.getElementById('ag-net-banner');
+    if (mode === 'hidden') {
+      if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
+      return;
+    }
+    if (!banner) {
+      banner = d.createElement('div');
+      banner.id = 'ag-net-banner';
+      banner.setAttribute('role', 'status');
+      banner.style.cssText =
+        'position:fixed;top:max(10px, var(--agy-safe-top, env(safe-area-inset-top, 0px)));left:50%;transform:translateX(-50%);' +
+        'z-index:2147483004;padding:6px 12px;border-radius:999px;font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
+        'box-shadow:0 6px 20px rgba(0,0,0,0.35);pointer-events:none;transition:opacity 0.2s ease;';
+      root.appendChild(banner);
+    }
+    if (mode === 'ok') {
+      banner.style.background = 'rgba(22,163,74,0.92)';
+      banner.style.color = '#ffffff';
+      banner.style.border = '1px solid rgba(74,222,128,0.45)';
+    } else {
+      banner.style.background = 'rgba(217,119,6,0.94)';
+      banner.style.color = '#ffffff';
+      banner.style.border = '1px solid rgba(251,191,36,0.5)';
+    }
+    banner.textContent = text;
+    if (mode === 'ok') {
+      reconnectHideTimer = origSetTimeout(function () {
+        reconnectHideTimer = null;
+        var b = d.getElementById('ag-net-banner');
+        if (b && b.parentNode) b.parentNode.removeChild(b);
+      }, 2200);
+    }
+  } catch (_) {}
+}
+
+function scheduleReconnectAttempt() {
+  if (reconnectTimer || reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) return;
+  reconnectAttempt += 1;
+  var delay = Math.min(INITIAL_RECONNECT_MS * Math.pow(1.45, reconnectAttempt - 1), MAX_RECONNECT_MS);
+  var sec = Math.max(1, Math.round(delay / 1000));
+  updateNetBanner('warn', 'Connection interrupted — reconnecting (' + reconnectAttempt + '/' + MAX_RECONNECT_ATTEMPTS + ', ' + sec + 's)…');
+  reconnectTimer = origSetTimeout(function () {
+    reconnectTimer = null;
+    triggerStreamRecovery('net-reconnect', true);
+    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+      scheduleReconnectAttempt();
+    }
+  }, delay);
+}
+
+function notifyNetworkFailure() {
+  if (!reconnectTimer && reconnectAttempt === 0) {
+    scheduleReconnectAttempt();
+  }
+}
+
+function notifyNetworkSuccess() {
+  var wasRecovering = reconnectAttempt > 0 || !!reconnectTimer;
+  if (reconnectTimer) {
+    try { origClearTimeout(reconnectTimer); } catch (_) {}
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+  if (wasRecovering) {
+    updateNetBanner('ok', 'Reconnected');
+    triggerStreamRecovery('net-online', false);
+  }
+}
 
 // Fast-forward the 1000ms reconnect backoff right after a host resume.
 try {
@@ -373,6 +457,8 @@ try {
       }
       triggerStreamRecovery('agy:host-resume', true);
     });
+    bindTarget('offline', notifyNetworkFailure);
+    bindTarget('online', notifyNetworkSuccess);
   }
   if (global.document && global.document.addEventListener) {
     global.document.addEventListener('visibilitychange', function () {
@@ -589,7 +675,10 @@ function installFetchRewrite() {
     var doCall = (isStream && typeof wrapStreamingFetch === 'function')
       ? function () { return wrapStreamingFetch(origFetch, u, opts); }
       : function () { return origFetch(u, opts); };
-    return doCall().catch(function (err) {
+    return doCall().then(function (resp) {
+      if (typeof notifyNetworkSuccess === 'function') notifyNetworkSuccess();
+      return resp;
+    }).catch(function (err) {
       if (isAbortedError(err, opts)) {
         throw err;
       }
@@ -600,6 +689,7 @@ function installFetchRewrite() {
           }, 120);
         });
       }
+      if (typeof notifyNetworkFailure === 'function') notifyNetworkFailure();
       throw err;
     });
   }
@@ -730,7 +820,9 @@ var api = {
   syncCsrf: syncCsrf,
   parseEndpointSpec: parseEndpointSpec,
   triggerStreamRecovery: typeof triggerStreamRecovery === 'function' ? triggerStreamRecovery : function () {},
-  getActiveStreamCount: function () { return typeof activeStreamClosers !== 'undefined' ? activeStreamClosers.size : 0; }
+  getActiveStreamCount: function () { return typeof activeStreamClosers !== 'undefined' ? activeStreamClosers.size : 0; },
+  notifyNetworkFailure: typeof notifyNetworkFailure === 'function' ? notifyNetworkFailure : function () {},
+  notifyNetworkSuccess: typeof notifyNetworkSuccess === 'function' ? notifyNetworkSuccess : function () {}
 };
 
 window.__agBridgeCore = api;

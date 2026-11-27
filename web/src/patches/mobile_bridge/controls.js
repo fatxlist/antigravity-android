@@ -135,7 +135,16 @@ function ensureBridgeStyles() {
     '  box-shadow: 0 6px 20px rgba(0,0,0,0.3); pointer-events: none; max-width: calc(100vw - 32px);',
     '  text-align: center;',
     '}',
-    'html.light #ag-mb-toast { background: rgba(15,23,42,0.88); color: #ffffff; }'
+    'html.light #ag-mb-toast { background: rgba(15,23,42,0.88); color: #ffffff; }',
+    '#ag-mb-path-card {',
+    '  position: fixed; left: 50%; bottom: calc(18px + var(--agy-safe-bottom, env(safe-area-inset-bottom, 0px))); transform: translateX(-50%);',
+    '  z-index: 2147483002; width: min(360px, calc(100vw - 24px)); border-radius: 14px; padding: 12px 14px;',
+    '  border: 1px solid rgba(148,163,184,0.28); background: rgba(15,23,42,0.97); color: #f1f5f9;',
+    '  box-shadow: 0 16px 38px rgba(0,0,0,0.46);',
+    '  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
+    '}',
+    'html.light #ag-mb-path-card { background: rgba(255,255,255,0.98); color: #0f172a; border-color: rgba(15,23,42,0.14); }',
+    '.ag-mb-path-text { font: 11px/1.35 monospace; opacity: 0.78; word-break: break-all; margin-bottom: 10px; }'
   ].join('\n');
   (doc.head || doc.documentElement).appendChild(style);
 }

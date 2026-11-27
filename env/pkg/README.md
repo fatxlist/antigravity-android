@@ -1,19 +1,19 @@
 # env/pkg
 
 ## Overview
-Standalone POSIX/Bash + AWK package manager CLI (`pkg`) designed for Antigravity's Android Bionic userspace without external `dpkg`, `apt`, `ar`, or Python runtime dependencies. Orchestrates repository index updates, dependency-resolved `.deb` installs, upgrades, removals, cache cleanup, index/DB queries, and offline self-tests by delegating core primitives to `./lib/`.
+Standalone POSIX/Bash + AWK package manager CLI (`pkg`) with an optional pure-Python 3 stdlib acceleration engine (`lib/pkg_core.py`), designed for Antigravity's Android Bionic userspace without external `dpkg` or `apt` dependencies. Orchestrates repository index updates, dependency-resolved parallel `.deb` downloads and installs, upgrades, removals, cache cleanup, index/DB queries, and offline self-tests by delegating core primitives to `./lib/`.
 
 ## Interface
 - `[pkg:main]` CLI entrypoint (`#!/data/data/com.agy/files/usr/bin/bash`, `set -uo pipefail`) sourcing `util.sh`, `version.sh`, `index.sh`, `db.sh`, `fetch.sh`, `deb.sh`, and `resolver.sh` from `$PKG_SELF/lib` (`[pkg:PKG_LIB]`).
-- `[pkg:update]` (`[pkg:cmd_update]`) Fetches `Packages.gz` from `$PKG_REPOS`, writes `$PKG_INDEX/repo.<n>.{Packages,url}`, and rebuilds TSV indexes via `index_rebuild_all`.
-- `[pkg:install]` (`[pkg:cmd_install]`) Accepts apt-compat no-op flags (`-y`/`--yes`, `-q`/`--quiet`, `-f`/`--fix-broken`), resolves dependencies via `resolve`, and installs packages via `[pkg:install_one]`.
-- `[pkg:upgrade]` (`[pkg:cmd_upgrade]`) Syncs dpkg DB, rebuilds indexes, and upgrades installed packages whose repo version is greater (`deb_vercmp == 1`) via `[pkg:install_one]`.
+- `[pkg:update]` (`[pkg:cmd_update]`) Conditionally fetches (`curl -z "$gz"`) `Packages.gz` from `$PKG_REPOS`, writes `$PKG_INDEX/repo.<n>.{Packages,url}`, and rebuilds TSV indexes via `index_rebuild_all`.
+- `[pkg:install]` (`[pkg:cmd_install]`) Accepts apt-compat flags (`-y`/`--yes`, `-q`/`--quiet`, `-f`/`--fix-broken`) plus `--keep-cache`, resolves dependencies via `pkg_core.py plan` (or `resolve` fallback), downloads `.deb` batches via `fetch_batch` (`curl -Z --http2`), and installs via `install_cached_deb` / `install_one`.
+- `[pkg:upgrade]` (`[pkg:cmd_upgrade]`) Syncs dpkg DB, rebuilds indexes, batch-fetches outdated packages where repo version exceeds installed version, and upgrades via `install_cached_deb` / `install_one`.
 - `[pkg:remove]` / `[pkg:uninstall]` (`[pkg:cmd_remove]`) Accepts no-op flags (`-y`/`--yes`, `-q`/`--quiet`), removes files listed in `$PKG_DB/<pkg>.files`, prunes empty parent dirs, and calls `db_remove`.
-- `[pkg:clean]` (`[pkg:cmd_clean]`) Removes cached `.deb` archives in `$PKG_CACHE/*.deb`.
-- `[pkg:list]` / `[pkg:list-all]` (`[pkg:cmd_list]`), `[pkg:installed]` / `[pkg:list-installed]` (`[pkg:cmd_installed]`), `[pkg:info]` / `[pkg:show]` (`[pkg:cmd_info]`), `[pkg:search]` (`[pkg:cmd_search]`), `[pkg:why]` (`[pkg:cmd_why]`) Index and installed-DB query subcommands.
+- `[pkg:clean]` (`[pkg:cmd_clean]`) Removes cached `.deb` archives in `$PKG_CACHE/*.deb` (also pruned post-install unless `--keep-cache` is passed).
+- `[pkg:list]` / `[pkg:list-all]` (`[pkg:cmd_list]`), `[pkg:installed]` / `[pkg:list-installed]` (`[pkg:cmd_installed]`), `[pkg:info]` / `[pkg:show]` (`[pkg:cmd_info]`), `[pkg:search]` (`[pkg:cmd_search]`), `[pkg:why]` (`[pkg:cmd_why]`) Index and installed-DB query subcommands (`cmd_list` and `cmd_search` fast-path via `pkg_core.py`).
 - `[pkg:selftest]` (`[pkg:cmd_selftest]`), `[pkg:version]`, `[pkg:help]` / `-h` / `--help` (`[pkg:cmd_help]`) Offline environment verification and CLI metadata commands.
 - `[pkg:PKG_DEB_STRIP]` Reads optional `PKG_DEB_STRIP` (default `6`) plus `PREFIX`, `PKG_ROOT`, `PKG_VERSION`, `PKG_DB`, `PKG_CACHE`, `PKG_INDEX`, `PKG_ETC`, `PKG_CERT`, `PKG_REPOS`, `PKG_CHANNEL`, `PKG_COMPONENT`, and `PKG_ARCH` from `lib/util.sh` and `load_conf`.
-- Child library contract: [./lib/README.md](./lib/README.md) — core Bash/AWK modules (`util.sh`, `db.sh`, `deb.sh`, `fetch.sh`, `index.sh`, `index.awk`, `version.sh`, `vercmp.awk`, `resolver.sh`).
+- Child library contract: [./lib/README.md](./lib/README.md) — Python acceleration module (`pkg_core.py`) and Bash/AWK modules (`util.sh`, `db.sh`, `deb.sh`, `fetch.sh`, `index.sh`, `index.awk`, `version.sh`, `vercmp.awk`, `resolver.sh`).
 
 ## Invariants
 - `[pkg:cmd_update]` Probes `PKG_REPOS` in preference order and stops on the first mirror that downloads with `--cacert "$PKG_CERT"` and gunzips cleanly; aborts via `die` if zero indexes succeed.

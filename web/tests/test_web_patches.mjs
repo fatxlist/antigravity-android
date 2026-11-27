@@ -1123,3 +1123,273 @@ function createMockDom() {
 
   console.log('test bridge.core.js streaming recovery: OK');
 }
+
+// ---------------------------------------------------------------------------
+// 9. Test patches/account_switcher.js (vault sync + Settings UI section/screen)
+// ---------------------------------------------------------------------------
+{
+  const { windowObj } = createMockDom();
+  const dispatchedEvents = [];
+  let activeId = 'alice@example.com';
+  const accountsDb = [
+    { id: 'alice@example.com', email: 'alice@example.com', name: 'Alice', tier: 'Pro', active: true },
+    { id: 'bob@example.com', email: 'bob@example.com', name: 'Bob', tier: 'Free', active: false }
+  ];
+  const calls = { sync: [], switched: [], removed: [], restarted: 0, authChecks: 0, refreshes: 0 };
+
+  windowObj.__AG_NATIVE_BRIDGE_TOKEN__ = 'acct-tok';
+  windowObj.CustomEvent = class MockCustomEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  };
+  windowObj.addEventListener = () => {};
+  windowObj.removeEventListener = () => {};
+  windowObj.dispatchEvent = (ev) => {
+    dispatchedEvents.push(ev.type);
+    return true;
+  };
+  windowObj.Android = {
+    listSavedAccounts(tok) {
+      assert.equal(tok, 'acct-tok');
+      return JSON.stringify(accountsDb.map((a) => ({ ...a, active: a.id === activeId })));
+    },
+    syncCurrentAccount(tok, profileJson) {
+      assert.equal(tok, 'acct-tok');
+      calls.sync.push(JSON.parse(profileJson));
+      return this.listSavedAccounts(tok);
+    },
+    switchSavedAccount(tok, id) {
+      assert.equal(tok, 'acct-tok');
+      calls.switched.push(id);
+      activeId = id;
+      return JSON.stringify({ ok: true, accountId: id, email: id, accounts: JSON.parse(this.listSavedAccounts(tok)) });
+    },
+    removeSavedAccount(tok, id) {
+      assert.equal(tok, 'acct-tok');
+      calls.removed.push(id);
+      const idx = accountsDb.findIndex((a) => a.id === id);
+      if (idx >= 0) accountsDb.splice(idx, 1);
+      return this.listSavedAccounts(tok);
+    },
+    restartCoreForAccountSwitch(tok) {
+      assert.equal(tok, 'acct-tok');
+      calls.restarted += 1;
+    }
+  };
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'account_switcher.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  assert.ok(windowObj.__agAccountSwitcher, '__agAccountSwitcher should be installed');
+  const firstSync = windowObj.__agAccountSwitcher.syncProfile(
+    { email: 'alice@example.com', name: 'Alice', userTier: { description: 'Pro' } },
+    { project: 'proj-1', location: 'us-central1', isGcpTos: true }
+  );
+  assert.equal(firstSync.length, 2);
+  assert.equal(calls.sync.length, 1);
+  assert.equal(calls.sync[0].projectId, 'proj-1');
+  assert.ok(dispatchedEvents.includes('ag:accounts-updated'));
+
+  // Repeating same payload must dedup without invoking Android.syncCurrentAccount again
+  windowObj.__agAccountSwitcher.syncProfile(
+    { email: 'alice@example.com', name: 'Alice', userTier: { description: 'Pro' } },
+    { project: 'proj-1', location: 'us-central1', isGcpTos: true }
+  );
+  assert.equal(calls.sync.length, 1, 'syncProfile should deduplicate identical payloads');
+
+  // Minimal synchronous React harness for renderScreen / renderSection
+  const stateSlots = [];
+  let hookIdx = 0;
+  const mockReact = {
+    useState(init) {
+      const idx = hookIdx++;
+      if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+      return [stateSlots[idx], (v) => { stateSlots[idx] = v; }];
+    },
+    useEffect() {},
+    createElement(type, props, ...children) {
+      if (typeof type === 'function') {
+        hookIdx = 0;
+        return type({ ...(props || {}), children });
+      }
+      return { type, props: props || {}, children };
+    }
+  };
+  const screenEl = windowObj.__agAccountSwitcher.renderScreen({
+    React: mockReact,
+    LU: 'Screen',
+    PU: 'Section',
+    NU: 'Card',
+    OU: 'Row',
+    BI: 'Button',
+    Dgb: null,
+    eE: null,
+    userStatus: { email: 'alice@example.com', name: 'Alice' },
+    authService: {
+      showLoginFlow() {},
+      async checkCurrentAuthStatus() { calls.authChecks += 1; }
+    },
+    async refreshUserStatus() { calls.refreshes += 1; },
+    getStoreState: () => ({ userStatus: { email: activeId }, auth: { context: {} } }),
+    isRemoteClient: false
+  });
+  assert.equal(screenEl.props.title, 'Accounts');
+
+  // Find Switch & Remove buttons inside virtual tree
+  const buttons = [];
+  (function walk(node) {
+    if (!node) return;
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (typeof node === 'object') {
+      if (node.type === 'Button') buttons.push(node);
+      if (node.props && node.props.rightElement) walk(node.props.rightElement);
+      if (node.children) walk(node.children);
+    }
+  })(screenEl);
+
+  const switchBtn = buttons.find((b) => b.children.includes('Switch'));
+  assert.ok(switchBtn, 'Switch button should render for inactive Bob account');
+  switchBtn.props.onClick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(calls.switched, ['bob@example.com']);
+  assert.equal(calls.authChecks, 1);
+  assert.equal(calls.refreshes, 1);
+  assert.equal(calls.restarted, 0, 'In-place auth refresh succeeded without core restart');
+
+  const removeBtns = buttons.filter((b) => b.children.includes('Remove'));
+  assert.equal(removeBtns.length, 2);
+  removeBtns[0].props.onClick();
+  assert.deepEqual(calls.removed, ['alice@example.com']);
+
+  console.log('test patches/account_switcher.js: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 10. Test patches/mobile_bridge.js clickable file paths & APK install card
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document, body, MockEvent } = createMockDom();
+  const pathCalls = { apk: [], open: [] };
+  windowObj.__AG_NATIVE_BRIDGE_TOKEN__ = 'path-tok';
+  windowObj.location.pathname = '/';
+  windowObj.CustomEvent = class MockCustomEvent { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } };
+  windowObj.addEventListener = () => {};
+  windowObj.dispatchEvent = () => true;
+  windowObj.Android = {
+    isDesktopMode: () => false,
+    setDesktopMode: () => {},
+    isExtraKeysVisible: () => false,
+    setExtraKeysVisible: () => {},
+    getMicrophonePermissionState: () => 'granted',
+    installLocalApk(tok, p) { pathCalls.apk.push([tok, p]); return true; },
+    openLocalPath(tok, p, folder) { pathCalls.open.push([tok, p, folder]); return true; }
+  };
+
+  const apkLink = document.createElement('a');
+  apkLink.setAttribute('href', 'file:///storage/emulated/0/Download/app-release.apk');
+  apkLink.textContent = 'app-release.apk';
+  body.appendChild(apkLink);
+
+  const codePath = document.createElement('code');
+  codePath.textContent = '/storage/emulated/0/Documents/notes.txt';
+  body.appendChild(codePath);
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'mobile_bridge.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  document.dispatchEvent(Object.assign(new MockEvent('click', { cancelable: true }), { target: apkLink }));
+  const installBtn = document.getElementById('ag-mb-path-install-apk');
+  assert.ok(installBtn, 'Clicking .apk file:// link should mount #ag-mb-path-card with #ag-mb-path-install-apk');
+  installBtn.dispatchEvent(new MockEvent('click'));
+  assert.deepEqual(pathCalls.apk, [['path-tok', '/storage/emulated/0/Download/app-release.apk']]);
+
+  document.dispatchEvent(Object.assign(new MockEvent('click', { cancelable: true }), { target: codePath }));
+  assert.equal(document.getElementById('ag-mb-path-install-apk'), null, 'Non-APK path should not show APK install button');
+  const folderBtn = document.getElementById('ag-mb-path-open-folder');
+  assert.ok(folderBtn, 'Clicking local path <code> should offer Open Folder');
+  folderBtn.dispatchEvent(new MockEvent('click'));
+  assert.deepEqual(pathCalls.open, [['path-tok', '/storage/emulated/0/Documents/notes.txt', true]]);
+
+  console.log('test patches/mobile_bridge.js clickable paths: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 11. Test patches/web_optimizations.js broken data:video image badge fallback
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document, body, MockEvent } = createMockDom();
+  windowObj.HTMLElement = windowObj.HTMLInputElement;
+  windowObj.addEventListener = () => {};
+  windowObj.requestAnimationFrame = () => 1;
+  windowObj.cancelAnimationFrame = () => {};
+
+  const holder = document.createElement('div');
+  const vidImg = document.createElement('img');
+  vidImg.setAttribute('src', 'data:video/mp4;base64,AAAA');
+  vidImg.src = 'data:video/mp4;base64,AAAA';
+  vidImg.setAttribute('alt', 'clip.mp4');
+  holder.appendChild(vidImg);
+  body.appendChild(holder);
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'patches', 'web_optimizations.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  document.dispatchEvent(Object.assign(new MockEvent('error'), { target: vidImg }));
+  assert.equal(vidImg.getAttribute('data-agy-broken-video'), 'true');
+  assert.equal(vidImg.style.display, 'none');
+  const badge = holder.querySelector('[data-agy-video-badge="true"]');
+  assert.ok(badge, 'Broken video img should render .agy-video-badge');
+  assert.ok(badge.textContent.includes('MP4'), `Expected MP4 label, got ${badge.textContent}`);
+
+  console.log('test patches/web_optimizations.js video badge fallback: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 12. Test bridge.core.js network reconnect banner
+// ---------------------------------------------------------------------------
+{
+  const { windowObj, document } = createMockDom();
+  windowObj.location = { search: '?port=45157', href: 'https://127.0.0.1:45157/' };
+  windowObj.addEventListener = () => {};
+  windowObj.dispatchEvent = () => true;
+  windowObj.fetch = async () => ({ ok: true, status: 200 });
+
+  const code = fs.readFileSync(path.join(GEN_DIR, 'bridge.core.js'), 'utf8');
+  vm.runInNewContext(code, windowObj);
+
+  windowObj.__agBridgeCore.notifyNetworkFailure();
+  const warnBanner = document.getElementById('ag-net-banner');
+  assert.ok(warnBanner, 'notifyNetworkFailure should mount #ag-net-banner');
+  assert.ok(warnBanner.textContent.includes('reconnecting'), 'Warn banner should mention reconnecting');
+
+  windowObj.__agBridgeCore.notifyNetworkSuccess();
+  const okBanner = document.getElementById('ag-net-banner');
+  assert.ok(okBanner, 'notifyNetworkSuccess after failure should update #ag-net-banner');
+  assert.equal(okBanner.textContent, 'Reconnected');
+
+  console.log('test bridge.core.js reconnect banner: OK');
+}
+
+// ---------------------------------------------------------------------------
+// 13. Test patch_main.py applies all 3 v2.35.2 hooks idempotently on web/main.js
+// ---------------------------------------------------------------------------
+{
+  const mainJs = path.join(WEB_DIR, 'main.js');
+  if (fs.existsSync(mainJs)) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-patch-real-'));
+    const tmpTarget = path.join(tmpDir, 'main.js');
+    fs.copyFileSync(mainJs, tmpTarget);
+    const out1 = execFileSync('python3', ['-B', path.join(WEB_DIR, 'patch_main.py'), tmpTarget], { encoding: 'utf8' });
+    assert.ok(out1.includes('Patched Desktop Mode toggle'), `Desktop Mode missing in output: ${out1}`);
+    assert.ok(out1.includes('Patched Account Switcher'), `Account Switcher missing in output: ${out1}`);
+    assert.ok(out1.includes('Patched composer any-file attachments'), `Attachments missing in output: ${out1}`);
+    // Second run must be an idempotent no-op
+    const patchedSize = fs.statSync(tmpTarget).size;
+    execFileSync('python3', ['-B', path.join(WEB_DIR, 'patch_main.py'), tmpTarget], { encoding: 'utf8' });
+    assert.equal(fs.statSync(tmpTarget).size, patchedSize, 'patch_main.py must be idempotent on second run');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.log('test patch_main.py v2.35.2 hooks & idempotency: OK');
+  }
+}

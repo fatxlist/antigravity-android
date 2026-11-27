@@ -60,6 +60,7 @@ function installMobileBridge() {
   installMicTrackObserver();
   installMicrophonePermissionShim();
   installClipboardImageInterceptor();
+  installPathClickInterceptor();
   installFocusTracking();
   mountQuickControls();
   // Drain any payload stashed by native before mobile_bridge.js executed.
@@ -101,6 +102,8 @@ global.__agMobileBridge = {
   onVoiceDictationStateChanged: onVoiceDictationStateChanged,
   onVoiceServiceStateChanged: onVoiceServiceStateChanged,
   applyBufferedShare: applyBufferedShare,
+  openPathCard: showPathActionCard,
+  dismissPathCard: dismissPathCard,
   openDrawer: function () { setDrawerOpen(true); },
   closeDrawer: function () { setDrawerOpen(false); },
   toggleDrawer: function () { setDrawerOpen(!state.drawerOpen); },

@@ -86,8 +86,9 @@ web/
 │   └── patches/                  # Мобильные патчи и адаптеры
 │       ├── web_optimizations.js
 │       ├── touch_model_menu.js
-│       ├── theme_sync.js
-│       ├── mobile_bridge.js
+│   │   ├── theme_sync.js
+│   │   ├── account_switcher.js
+│   │   ├── mobile_bridge.js
 │       └── startup_ready.js
 ├── src/                          # Модульные исходники фрагментов бандлов (см. ./src/README.md)
 │   ├── boot/                     # Фрагменты раннего старта
@@ -251,9 +252,9 @@ web/
 ---
 
 ## Interface
-- `[src.manifest:bundle iife]` Declarative bundle manifest (`#`/`;` comments; `bundle iife`, `bundle`, `src/*`) assembling 8 IIFE bundles under `web/generated/**` from 42 fragments in `web/src/**`.
+- `[src.manifest:bundle iife]` Declarative bundle manifest (`#`/`;` comments; `bundle iife`, `bundle`, `src/*`) assembling 9 bundles under `web/generated/**` from 44 fragments in `web/src/**`.
 - `[build.sh:MANIFEST]` / `[build.sh:GEN_DIR]` / `[build.sh:PYTHON_BIN]` / `[build.sh:is_already_iife]` / `[build.sh:emit_bundle]` Zero-argument Bash build pipeline compiling `src.manifest`, copying `main.js` into `web/generated/main.js`, running `patch_main.py`, and running `node --check` on generated outputs.
-- `[patch_main.py:patch_main]` / `[patch_main.py:_detect_setting_components]` / `[patch_main.py:_identifier_declared]` / `[patch_main.py:_verify_js_syntax]` Python 3 CLI (`patch_main.py [file_path]`) and callable `patch_main(file_path) -> bool` injecting the Desktop Mode Appearance toggle wired to `window.Android.isDesktopMode()`, `window.Android.setDesktopMode(v)`, and `localStorage['ag_desktop_mode']`.
+- `[patch_main.py:patch_main]` / `[patch_main.py:_detect_setting_components]` / `[patch_main.py:_identifier_declared]` / `[patch_main.py:_verify_js_syntax]` Python 3 CLI (`patch_main.py [file_path]`) and callable `patch_main(file_path) -> bool` injecting the Desktop Mode Appearance toggle, Account Switcher Settings section/screen + profile sync hook (`window.__agAccountSwitcher`), and relaxed composer file attachment filters (`10MB` limit, extra code/config extensions, text MIME pass-through).
 - `[index.html:#root]` SPA shell (`title: 'Jetski Web'`) defining `#root`, dark/light CSS variables (`--bg-main`, `--bg-card`, `--accent-glow`, `--text-primary`, `--text-secondary`), BiDi rules, `<head>` boot scripts (`custom-elements-guard.js`, `theme-bootstrap.js`), and locked `<body>` runtime scripts ending with deferred `prism_bundle.js` and `generated/main.js`.
 - `[audio_processor.js:AudioStreamingProcessor]` / `[audio_processor.js:registerProcessor]` Registers `AudioWorkletProcessor` `'audio-streaming-processor'` (`TARGET_SAMPLE_RATE = 16000`, `CHUNK_SAMPLES = 640`) streaming mono `Int16Array` PCM transferable chunks over `this.port` and handling `'stop'` -> flush + `'done'`.
 - `[diff_worker.js:self.onmessage]` / `[diff_worker.js:computeDiffArrays]` / `[diff_worker.js:computeDiffStats]` Standalone Web Worker handling `{ id, type: 'diffArrays', oldArr, newArr, ignoreWhitespace }` and `{ id, type: 'diffStats', original, modified }` messages (returning `{ id, error }` on failure).

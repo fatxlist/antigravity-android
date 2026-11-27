@@ -413,6 +413,21 @@ class TestDaemonExecutor(unittest.TestCase):
         self.assertEqual(posted[0][0][0], "Antigravity: Input Needed")
         self.assertEqual(posted[0][1].get("cascade_id"), user_id)
 
+    def test_daemon_lock_export_and_flock(self):
+        import daemon
+        self.assertTrue(hasattr(daemon, "LOCK_FILE"))
+        self.assertEqual(daemon.LOCK_FILE, os.path.join(daemon.CONFIG_DIR, "daemon.lock"))
+        self.assertEqual(executor.LOCK_FILE, os.path.join(daemon.CONFIG_DIR, "daemon.lock"))
+        self.assertTrue(daemon.LOCK_FILE.endswith("daemon.lock"))
+
+        daemon_bin = os.path.join(ENV_DIR, "overlay", "bin", "agy-daemon")
+        with open(daemon_bin, "r", encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("fcntl.flock", src)
+        self.assertIn("LOCK_FILE", src)
+        self.assertIn("os._exit(0)", src)
+        self.assertNotIn("/data/user/0/com.agy/files", src)
+
 
 if __name__ == "__main__":
     unittest.main()

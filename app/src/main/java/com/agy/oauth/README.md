@@ -1,9 +1,15 @@
 # com.agy.oauth
 
 ## Overview
-Handles external-browser OAuth delegation and read-only detection of the standalone core's persisted OAuth token file. Classifies OAuth/sign-in URLs that must leave the in-app WebView, resolves and launches an external browser via `ACTION_VIEW` intents, exposes shared OAuth/Custom Tabs constants, inspects the core token file, and binds these pieces behind `OAuthManager`.
+Handles external-browser OAuth delegation, read-only detection of the standalone core's persisted OAuth token file, and thread-safe owner-only (`0600`) multi-account snapshot storage (`AccountVaultStore`). Classifies OAuth/sign-in URLs that must leave the in-app WebView, resolves and launches an external browser via `ACTION_VIEW` intents, exposes shared OAuth/Custom Tabs constants, inspects/rotates the core token file, and binds these pieces behind `OAuthManager`.
 
 ## Interface
+- `AccountVaultStore` (`public final class`, non-instantiable `[AccountVaultStore.java:AccountVaultStore]`):
+  - `vaultFile(Context)` — resolves `<filesDir>/.gemini/agy-account-vault.json` `[AccountVaultStore.java:vaultFile]`.
+  - `syncCurrentAccount(Context|File, ...)` — captures the current token file plus profile metadata and returns sanitized public account JSON `[AccountVaultStore.java:syncCurrentAccount]`.
+  - `listAccountsJson(Context|File)` — lists saved accounts sorted active-first, then most recently used `[AccountVaultStore.java:listAccountsJson]`.
+  - `activateAccount(Context|File, ..., accountId, outgoingProfileJson)` — saves outgoing token/metadata, atomically overwrites the active core token file, and updates `active_account_id` `[AccountVaultStore.java:activateAccount]`.
+  - `removeAccount(Context|File, ..., accountId)` — removes a saved account entry from the vault `[AccountVaultStore.java:removeAccount]`.
 - `AuthUrlMatcher` (`public final class` `[AuthUrlMatcher.java:AuthUrlMatcher]`):
   - `isAuthUrl(String url)` — returns `true` for `http`/`https` URLs matching Google OAuth hosts/paths or `antigravity.google` `/auth` paths `[AuthUrlMatcher.java:isAuthUrl]`.
 - `CustomTabLauncher` (`public final class` `[CustomTabLauncher.java:CustomTabLauncher]`):
@@ -33,6 +39,7 @@ Handles external-browser OAuth delegation and read-only detection of the standal
 - `OAuthConstants` and `OAuthTokenStore` are non-instantiable utility classes with private constructors `[OAuthConstants.java:OAuthConstants]` `[OAuthTokenStore.java:OAuthTokenStore]`.
 - `OAuthTokenStore.tokenFile` and `OAuthTokenStore.hasToken` tolerate `null` `Context` (returning `null` and `false`) and read strictly from `context.getFilesDir()/.gemini/jetski-standalone-oauth-token` `[OAuthTokenStore.java:tokenFile]` `[OAuthTokenStore.java:hasToken]`.
 - `OAuthTokenStore.hasToken` reads at most `MAX_SCAN` (`8192`) bytes as UTF-8 in a single read, returns `false` on missing/non-regular/empty files or I/O exceptions, and rejects placeholder payloads where `"token"` is absent, `null`, or `""` `[OAuthTokenStore.java:MAX_SCAN]` `[OAuthTokenStore.java:hasToken]` `[OAuthTokenStore.java:isNullOrBlankToken]`.
+- `AccountVaultStore` protects all vault and token reads/writes under `LOCK`, writes atomically via `.tmp` + `Os.chmod(..., 0600)` + rename, refuses null/blank/corrupt tokens, deduplicates entries by `email|project_id` or token SHA-256 fingerprint, and omits raw `token_json`/`token_fp` secrets from `listAccountsJson` and `activateAccount` JSON responses `[AccountVaultStore.java:writePrivateAtomic]` `[AccountVaultStore.java:toPublicAccount]`.
 
 ## Side Effects
 - Queries `PackageManager.resolveActivity` with `MATCH_DEFAULT_ONLY` to discover the default HTTPS browser `[CustomTabLauncher.java:resolveDefaultBrowserPackage]`.

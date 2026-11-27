@@ -62,7 +62,10 @@ function installFetchRewrite() {
     var doCall = (isStream && typeof wrapStreamingFetch === 'function')
       ? function () { return wrapStreamingFetch(origFetch, u, opts); }
       : function () { return origFetch(u, opts); };
-    return doCall().catch(function (err) {
+    return doCall().then(function (resp) {
+      if (typeof notifyNetworkSuccess === 'function') notifyNetworkSuccess();
+      return resp;
+    }).catch(function (err) {
       if (isAbortedError(err, opts)) {
         throw err;
       }
@@ -73,6 +76,7 @@ function installFetchRewrite() {
           }, 120);
         });
       }
+      if (typeof notifyNetworkFailure === 'function') notifyNetworkFailure();
       throw err;
     });
   }

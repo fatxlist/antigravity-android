@@ -14,7 +14,7 @@
 
   [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
   [![Arch](https://img.shields.io/badge/ARM64-v8.0--A%2B-blue?style=flat-square)](https://arm.com)
-  [![Release](https://img.shields.io/badge/App-v2.5.2-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
+  [![Release](https://img.shields.io/badge/App-v2.6.0-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
   [![Core](https://img.shields.io/badge/Core-v2.35.2-0A7EA4?style=flat-square)](modules/core)
   [![CI](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml)
   [![License](https://img.shields.io/badge/License-Apache_2.0-orange?style=flat-square)](LICENSE)
@@ -43,10 +43,10 @@ No PRoot, chroot, or virtualization overhead. Antigravity runs **bare-metal insi
 
 * **Core & Web v2.35.2:** Updated `language_server` core and web bundle with loopback sidecar cookie proxying, SSE stream resume/recovery, full BiDi/RTL typography support, and upstream v2.35.x harness/UI improvements.
 * **Native MCP Servers:** Auto-seeded `agy-mcp-android` (device, UI, notifications, gateway tools) and `agy-mcp-browser` (`chrome_devtools`) in `~/.gemini/config/mcp_config.json` with bundled agent skills.
-* **Mobile-First Agent UX:** Voice dictation with foreground voice service, interactive tool-approval and subagent notifications (`Approve` / `Deny` / inline reply / `Cancel`), clickable notifications returning to chat, extra keys bar, clipboard image paste, Android Share Sheet intake, local HTML/web preview dialog, Desktop Mode toggle, and double-back exit confirmation.
-* **Gateway & Micro-Daemon:** Multi-threaded `SystemGatewayServer` (`doctor`/`repair`, async `exec_*` tasks, clickable notifications) and lightweight `agy-daemon` with ConnectRPC task dispatch, cron/file/GitHub triggers, and `resolv.conf` watchdog.
+* **Mobile-First Agent UX:** Account Vault & Settings account switcher, clickable local paths & APK install action card, relaxed composer file attachments, broken video badge fallback, network reconnect banner, voice dictation with foreground voice service, interactive tool-approval and subagent notifications (`Approve` / `Deny` / inline reply / `Cancel`), extra keys bar, clipboard image paste, Android Share Sheet intake, local HTML/web preview dialog, Desktop Mode toggle, passive GitHub release update checker, and double-back exit confirmation.
+* **Gateway & Micro-Daemon:** Multi-threaded `SystemGatewayServer` (`doctor`/`repair`, async `exec_*` tasks, clickable notifications), bounded `CrashRecorder` retention (`MAX_CRASH_REPORTS = 10`), and lightweight `agy-daemon` (`flock`-locked singleton, ConnectRPC task dispatch, cron/file/GitHub triggers, `resolv.conf` watchdog).
 * **Universal ARMv8.0-A Support:** Transparent atomic & SIMD emulation (`liblse_compat.so` with `SA_ONSTACK`), seccomp syscall compatibility (`faccessat`/`fchmodat`), and length-preserving PTY shell retargeting.
-* **Built-in `pkg` & Optional Shizuku:** Fast Termux package manager (`git`, `python`, `nodejs`, `clang`, etc.) plus optional ADB-level control (`uid=2000`) via Shizuku without root.
+* **Built-in `pkg` & Optional Shizuku:** Python-accelerated Termux package manager (`pkg_core.py`, `curl -Z --http2` parallel fetch, `--keep-cache`) plus optional ADB-level control (`uid=2000`) via Shizuku without root.
 
 ---
 

@@ -6,12 +6,15 @@ import com.agy.core.CoreServerService;
 import com.agy.core.VoiceForegroundService;
 import com.agy.gateway.SystemGatewayServer;
 import com.agy.gateway.handlers.DoctorHandler;
+import com.agy.log.CrashRecorder;
+import com.agy.oauth.AccountVaultStore;
 import com.agy.oauth.OAuthTokenStore;
 import com.agy.runtime.OnboardingSeeder;
 import com.agy.runtime.RuntimeManager;
 import com.agy.theme.EdgeToEdge;
 import com.agy.theme.ThemeColors;
 import com.agy.ui.MainActivity;
+import com.agy.ui.UpdateChecker;
 import com.agy.ui.download.FileDownloader;
 import com.agy.ui.extra.VoiceDictationController;
 import com.agy.ui.webview.AppHtmlInjector;
@@ -20,7 +23,11 @@ import com.agy.util.DocumentsContractHelper;
 import com.agy.util.HostActivityResolver;
 import com.agy.util.SensitiveDataRedactor;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Collections;
 import java.util.HashMap;
@@ -446,6 +453,114 @@ public final class UnitTests {
                 !RuntimeManager.cpuSupportsAllEmulatedFeatures(wrongKey));
     }
 
+    private static void testCrashRecorderPrune() throws Exception {
+        check("CrashRecorder MAX_CRASH_REPORTS == 10", CrashRecorder.MAX_CRASH_REPORTS == 10);
+        File tmpDir = createTempTestDir("agy_crash_prune_test_");
+        try {
+            File[] created = new File[14];
+            for (int i = 0; i < created.length; i++) {
+                created[i] = new File(tmpDir, String.format("crash_%04d.json", i));
+                Files.write(created[i].toPath(), ("crash " + i).getBytes(StandardCharsets.UTF_8));
+                created[i].setLastModified(1_700_000_000_000L + (i * 1000L));
+            }
+            File unrelated = new File(tmpDir, "notes.txt");
+            Files.write(unrelated.toPath(), "keep".getBytes(StandardCharsets.UTF_8));
+
+            CrashRecorder.pruneOldReports(tmpDir, CrashRecorder.MAX_CRASH_REPORTS);
+
+            for (int i = 0; i < 4; i++) {
+                check("oldest crash report pruned: " + i, !created[i].exists());
+            }
+            for (int i = 4; i < created.length; i++) {
+                check("recent crash report retained: " + i, created[i].exists());
+            }
+            check("non-crash file preserved", unrelated.exists());
+        } finally {
+            deleteRecursively(tmpDir);
+        }
+    }
+
+    private static void testUpdateCheckerHelpers() throws Exception {
+        check("compareSemver newer major/minor", UpdateChecker.compareSemver("v2.6.0", "2.5.2") > 0);
+        check("compareSemver equal with v prefix", UpdateChecker.compareSemver("2.5.2", "v2.5.2") == 0);
+        check("compareSemver numeric segment 10 > 2", UpdateChecker.compareSemver("2.5.10", "2.5.2") > 0);
+        check("compareSemver ignores pre-release suffix", UpdateChecker.compareSemver("2.5.2-beta", "2.5.2") == 0);
+        check("compareSemver older", UpdateChecker.compareSemver("2.5.1", "2.6.0") < 0);
+        check("compareSemver null < numeric", UpdateChecker.compareSemver(null, "1.0.0") < 0);
+
+        check("pickApkAssetUrl null release falls back to releases page",
+                "https://github.com/fatxlist/antigravity-android/releases".equals(UpdateChecker.pickApkAssetUrl(null)));
+
+        JSONObject release = new JSONObject();
+        release.put("html_url", "https://github.com/fatxlist/antigravity-android/releases/tag/v2.6.0");
+        JSONArray assets = new JSONArray();
+        JSONObject debugApk = new JSONObject();
+        debugApk.put("name", "antigravity-debug.apk");
+        debugApk.put("browser_download_url", "https://example.com/antigravity-debug.apk");
+        assets.put(debugApk);
+        JSONObject primaryApk = new JSONObject();
+        primaryApk.put("name", "antigravity.apk");
+        primaryApk.put("browser_download_url", "https://example.com/antigravity.apk");
+        assets.put(primaryApk);
+        release.put("assets", assets);
+        checkEquals("pickApkAssetUrl prefers antigravity.apk",
+                "https://example.com/antigravity.apk", UpdateChecker.pickApkAssetUrl(release));
+
+        JSONObject httpRelease = new JSONObject();
+        JSONObject insecureAsset = new JSONObject();
+        insecureAsset.put("name", "antigravity.apk");
+        insecureAsset.put("browser_download_url", "http://example.com/antigravity.apk");
+        httpRelease.put("assets", new JSONArray().put(insecureAsset));
+        httpRelease.put("html_url", "https://github.com/fatxlist/antigravity-android/releases/tag/v2.6.0");
+        checkEquals("pickApkAssetUrl rejects non-https asset url",
+                "https://github.com/fatxlist/antigravity-android/releases/tag/v2.6.0",
+                UpdateChecker.pickApkAssetUrl(httpRelease));
+    }
+
+    private static void testAccountVaultStore() throws Exception {
+        File tmpDir = createTempTestDir("agy_vault_test_");
+        try {
+            File tokenFile = new File(tmpDir, "agy-oauth-token.json");
+            File vaultFile = new File(tmpDir, "agy-account-vault.json");
+
+            String aliceToken = "{\"token\":{\"access_token\":\"ya29.alice\",\"refresh_token\":\"1//alice-ref\"}}";
+            Files.write(tokenFile.toPath(), aliceToken.getBytes(StandardCharsets.UTF_8));
+            String aliceListRaw = AccountVaultStore.syncCurrentAccount(
+                    tokenFile, vaultFile, "{\"email\":\"alice@example.com\",\"name\":\"Alice\",\"tier\":\"Pro\"}");
+            check("vault json hides refresh_token", !aliceListRaw.contains("alice-ref") && !aliceListRaw.contains("ya29."));
+
+            JSONArray arr1 = new JSONArray(aliceListRaw);
+            check("vault has 1 account after alice sync", arr1.length() == 1);
+            check("alice marked active", arr1.getJSONObject(0).optBoolean("active"));
+            checkEquals("alice email preserved", "alice@example.com", arr1.getJSONObject(0).optString("email"));
+
+            String bobToken = "{\"token\":{\"access_token\":\"ya29.bob\",\"refresh_token\":\"1//bob-ref\"}}";
+            Files.write(tokenFile.toPath(), bobToken.getBytes(StandardCharsets.UTF_8));
+            String bobListRaw = AccountVaultStore.syncCurrentAccount(
+                    tokenFile, vaultFile, "{\"email\":\"bob@example.com\",\"name\":\"Bob\"}");
+            JSONArray arr2 = new JSONArray(bobListRaw);
+            check("vault has 2 accounts after bob sync", arr2.length() == 2);
+            checkEquals("bob is first (active) account", "bob@example.com", arr2.getJSONObject(0).optString("email"));
+            check("bob active flag true", arr2.getJSONObject(0).optBoolean("active"));
+
+            String aliceId = "alice@example.com";
+            String switchRaw = AccountVaultStore.activateAccount(
+                    tokenFile, vaultFile, aliceId, "{\"email\":\"bob@example.com\",\"name\":\"Bob\"}");
+            JSONObject switchRes = new JSONObject(switchRaw);
+            check("activateAccount ok", switchRes.optBoolean("ok"));
+            checkEquals("activateAccount restored email", "alice@example.com", switchRes.optString("email"));
+            String activeTokenNow = new String(Files.readAllBytes(tokenFile.toPath()), StandardCharsets.UTF_8);
+            check("token file restored to alice", activeTokenNow.contains("ya29.alice") && !activeTokenNow.contains("ya29.bob"));
+
+            String afterRemoveRaw = AccountVaultStore.removeAccount(tokenFile, vaultFile, "bob@example.com");
+            JSONArray arr3 = new JSONArray(afterRemoveRaw);
+            check("removeAccount removed bob", arr3.length() == 1);
+            checkEquals("remaining account is alice", "alice@example.com", arr3.getJSONObject(0).optString("email"));
+        } finally {
+            deleteRecursively(tmpDir);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         testGatewayAuth();
         testOAuthTokenStore();
@@ -464,6 +579,9 @@ public final class UnitTests {
         testAppHtmlInjectorAssetVersioning();
         testCoreEnvironmentMobileGoTuning();
         testRuntimeManagerCpuFeatures();
+        testCrashRecorderPrune();
+        testUpdateCheckerHelpers();
+        testAccountVaultStore();
         System.out.println("[OK] Java unit tests passed (" + passed + " checks).");
     }
 }

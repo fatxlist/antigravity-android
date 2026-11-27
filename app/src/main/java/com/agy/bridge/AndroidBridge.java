@@ -3,11 +3,14 @@ package com.agy.bridge;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.webkit.JavascriptInterface;
 
 import com.agy.core.VoiceForegroundService;
 import com.agy.gateway.handlers.NotificationHandler;
+import com.agy.oauth.AccountVaultStore;
 import com.agy.runtime.RuntimeManager;
 import com.agy.shell.ShizukuBridge;
 import com.agy.theme.ThemeManager;
@@ -15,9 +18,12 @@ import com.agy.ui.MainActivity;
 import com.agy.ui.extra.ClipboardImageReader;
 import com.agy.ui.extra.ExtraKeysBarView;
 import com.agy.ui.extra.LocalPreviewDialog;
+import com.agy.util.AppFileProvider;
+import com.agy.util.UriDispatcher;
 
 import org.json.JSONObject;
 
+import java.io.File;
 import java.lang.ref.WeakReference;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
@@ -429,6 +435,141 @@ public final class AndroidBridge {
         if (act != null) {
             com.agy.ui.download.FileDownloader.handleBlobData(
                     act, base64Data, filename, mimeType);
+        }
+    }
+
+    /** Lists saved accounts with sanitized public metadata (no raw tokens exposed). */
+    @JavascriptInterface
+    public String listSavedAccounts(String token) {
+        if (!matchesNativeBridgeToken(token)) {
+            return "[]";
+        }
+        return AccountVaultStore.listAccountsJson(appContext);
+    }
+
+    /** Captures the active OAuth token and profile metadata into the owner-only vault. */
+    @JavascriptInterface
+    public String syncCurrentAccount(String token, String profileJson) {
+        if (!matchesNativeBridgeToken(token)) {
+            return "[]";
+        }
+        return AccountVaultStore.syncCurrentAccount(appContext, profileJson);
+    }
+
+    /** Switches the active standalone OAuth token file to a saved account ID. */
+    @JavascriptInterface
+    public String switchSavedAccount(String token, String accountId, String outgoingProfileJson) {
+        if (!matchesNativeBridgeToken(token)) {
+            return "{\"ok\":false,\"error\":\"unauthorized\"}";
+        }
+        return AccountVaultStore.activateAccount(appContext, accountId, outgoingProfileJson);
+    }
+
+    /** Removes a saved account entry from the vault. */
+    @JavascriptInterface
+    public String removeSavedAccount(String token, String accountId) {
+        if (!matchesNativeBridgeToken(token)) {
+            return "[]";
+        }
+        return AccountVaultStore.removeAccount(appContext, accountId);
+    }
+
+    /** Restarts the embedded core cleanly without deleting extracted runtime assets. */
+    @JavascriptInterface
+    public boolean restartCoreForAccountSwitch(String token) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        final MainActivity act = activityRef != null ? activityRef.get() : MainActivity.activeActivity;
+        if (act == null) {
+            return false;
+        }
+        act.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                act.restartCorePreservingRuntime();
+            }
+        });
+        return true;
+    }
+
+    /** Opens a validated local file or its parent folder from clickable chat paths. */
+    @JavascriptInterface
+    public boolean openLocalPath(String token, String rawPath, boolean openFolder) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        File target = resolveSafeLocalFile(appContext, rawPath);
+        if (target == null || !target.exists()) {
+            return false;
+        }
+        return openFolder
+                ? UriDispatcher.openParentDirectory(appContext, target)
+                : (target.isDirectory()
+                        ? UriDispatcher.openDirectory(appContext, target)
+                        : UriDispatcher.openFile(appContext, target));
+    }
+
+    /** Launches Android's system package installer for a validated {@code .apk} path. */
+    @JavascriptInterface
+    public boolean installLocalApk(String token, String rawPath) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        File target = resolveSafeLocalFile(appContext, rawPath);
+        if (target == null || !target.isFile()) {
+            return false;
+        }
+        return UriDispatcher.installApk(appContext, target);
+    }
+
+    private static File resolveSafeLocalFile(Context context, String rawPath) {
+        if (context == null || rawPath == null) {
+            return null;
+        }
+        String clean = rawPath.trim();
+        if (clean.isEmpty()) {
+            return null;
+        }
+        if (clean.startsWith("file://")) {
+            try {
+                String p = Uri.parse(clean).getPath();
+                clean = p != null ? p : "";
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        File extStorage = Environment.getExternalStorageDirectory();
+        if (extStorage != null) {
+            String extRoot = extStorage.getAbsolutePath();
+            if ("/sdcard".equals(clean)) {
+                clean = extRoot;
+            } else if (clean.startsWith("/sdcard/")) {
+                clean = extRoot + clean.substring("/sdcard".length());
+            }
+        }
+        if (!clean.startsWith("/")) {
+            return null;
+        }
+        try {
+            File file = new File(clean);
+            String canonical = file.getCanonicalPath();
+            File filesDir = context.getFilesDir();
+            File cacheDir = context.getCacheDir();
+            File extFiles = context.getExternalFilesDir(null);
+            File extCache = context.getExternalCacheDir();
+            File[] allowedDirs = new File[] { filesDir, cacheDir, extStorage, extFiles, extCache };
+            String[] allowedRoots = new String[allowedDirs.length];
+            for (int i = 0; i < allowedDirs.length; i++) {
+                allowedRoots[i] = allowedDirs[i] != null ? allowedDirs[i].getCanonicalPath() : null;
+            }
+            String filesCanonical = filesDir != null ? filesDir.getCanonicalPath() : null;
+            if (!AppFileProvider.isAllowedPath(canonical, filesCanonical, allowedRoots)) {
+                return null;
+            }
+            return new File(canonical);
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

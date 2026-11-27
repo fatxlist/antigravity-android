@@ -460,6 +460,18 @@ function installStyles(documentRef) {
       '}',
       'code[class*="language-"], pre[class*="language-"], code[class*="language-"] *, pre[class*="language-"] * {',
       '  text-shadow: none !important;',
+      '}',
+      '[data-testid="input-attachment"] img[alt*="video" i],',
+      '[data-testid="input-attachment-open"][aria-label*="video" i] img,',
+      'img[src^="data:video/"], img[data-agy-broken-video="true"] {',
+      '  display: none !important;',
+      '}',
+      '.agy-video-badge {',
+      '  display: inline-flex; align-items: center; gap: 4px;',
+      '  padding: 3px 8px; border-radius: 6px;',
+      '  background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.35);',
+      '  color: #38bdf8; font-size: 11px; font-weight: 600; line-height: 1.2;',
+      '  user-select: none;',
       '}'
     ].join('\n');
 
@@ -467,10 +479,45 @@ function installStyles(documentRef) {
   } catch (e) {}
 }
 
+function installMediaErrorFallback(documentRef) {
+  try {
+    if (!documentRef || documentRef.__agMediaFallbackInstalled || typeof documentRef.addEventListener !== 'function') {
+      return;
+    }
+    documentRef.__agMediaFallbackInstalled = true;
+    documentRef.addEventListener('error', function (ev) {
+      try {
+        var img = ev && ev.target;
+        if (!img || String(img.tagName || '').toUpperCase() !== 'IMG') return;
+        var src = (img.getAttribute && img.getAttribute('src')) || img.src || '';
+        var alt = (img.getAttribute && img.getAttribute('alt')) || '';
+        var parent = img.parentNode;
+        var parentLabel = parent && parent.getAttribute ? (parent.getAttribute('aria-label') || '') : '';
+        var combined = src + ' ' + alt + ' ' + parentLabel;
+        if (!/^data:video\//i.test(src) && !/(?:\.(?:mp4|mov|webm|mkv|avi)\b|\bvideo\b)/i.test(combined)) {
+          return;
+        }
+        if (img.setAttribute) img.setAttribute('data-agy-broken-video', 'true');
+        if (img.style) img.style.display = 'none';
+        if (!parent || typeof documentRef.createElement !== 'function') return;
+        if (parent.querySelector && parent.querySelector('[data-agy-video-badge="true"]')) return;
+        var extMatch = combined.match(/\.(mp4|mov|webm|mkv|avi)\b/i) || src.match(/^data:video\/([a-z0-9]+)/i);
+        var label = extMatch ? String(extMatch[1]).toUpperCase() : 'VIDEO';
+        var badge = documentRef.createElement('span');
+        badge.className = 'agy-video-badge';
+        badge.setAttribute('data-agy-video-badge', 'true');
+        badge.textContent = '\u25b6 ' + label;
+        parent.appendChild(badge);
+      } catch (_) {}
+    }, true);
+  } catch (e) {}
+}
+
 installEventOptimizations(global, doc);
 installResizeObserverGate(global);
 installFocusGuard(global, doc);
 installStyles(doc);
+installMediaErrorFallback(doc);
 
 global.__agWebOptimizations = {
   installed: true,

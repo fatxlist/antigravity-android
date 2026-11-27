@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.agy"
-    android:versionCode="20"
-    android:versionName="2.5.2">
+    android:versionCode="21"
+    android:versionName="2.6.0">
 
     <!-- targetSdk 28 is REQUIRED: Android 10+ (W^X) only allows exec of a binary
          from the app data dir when the app targets API <= 28. The core + glibc
@@ -48,6 +48,7 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <permission
         android:name="com.agy.permission.INTERNAL_BROADCAST"
         android:protectionLevel="signature" />

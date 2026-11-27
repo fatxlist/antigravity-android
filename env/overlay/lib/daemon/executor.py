@@ -41,6 +41,7 @@ CONFIG_DIR = os.path.join(HOME, ".gemini", "antigravity-app", "daemon")
 TASKS_FILE = os.path.join(CONFIG_DIR, "tasks.json")
 LOG_FILE = os.path.join(CONFIG_DIR, "daemon.log")
 PID_FILE = os.path.join(CONFIG_DIR, "daemon.pid")
+LOCK_FILE = os.path.join(CONFIG_DIR, "daemon.lock")
 STOP_EVENT = threading.Event()
 
 # ConnectRPC service constants matching bundled Antigravity v2.34.0+ language_server

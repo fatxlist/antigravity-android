@@ -25,7 +25,9 @@ cmd_update() {
         idx="$PKG_INDEX/repo.$i.Packages"
         local repo_url="$url/dists/$PKG_CHANNEL/$PKG_COMPONENT/binary-$PKG_ARCH/Packages.gz"
         printf 'Get:%s %s %s/%s %s Packages\n' "$i" "$url" "$PKG_CHANNEL" "$PKG_COMPONENT" "$PKG_ARCH"
-        if curl -# -fL --retry 2 --connect-timeout 10 --cacert "$PKG_CERT" -o "$gz" "$repo_url"; then
+        local curl_args=(-# -fL --retry 2 --connect-timeout 10 --cacert "$PKG_CERT")
+        [ -s "$gz" ] && [ -s "$idx" ] && curl_args+=(-z "$gz")
+        if curl "${curl_args[@]}" -o "$gz" "$repo_url"; then
             if gzip -dc "$gz" > "$idx"; then
                 printf '%s\n' "$url" > "$PKG_INDEX/repo.$i.url"
                 got=$((got + 1))
@@ -151,16 +153,30 @@ EOF
     printf 'Setting up %s (%s) ...\n' "$name" "$ver"
 }
 
+install_cached_deb() {
+    local name="$1" ver="$2" arch="$3" cache="$4" keep_cache="${5:-0}"
+    printf 'Selecting previously unselected package %s.\n' "$name"
+    printf 'Preparing to unpack .../%s ...\n' "$(basename "$cache")"
+    printf 'Unpacking %s (%s) ...\n' "$name" "$ver"
+    python3 -B "$PKG_LIB/pkg_core.py" stage-install \
+        "$cache" "$PREFIX" "$PKG_DB" "$name" "$ver" "$arch" \
+        --strip "${PKG_DEB_STRIP:-6}" \
+        || die "$name: extract failed"
+    [ "$keep_cache" -eq 0 ] && rm -f "$cache"
+    printf 'Setting up %s (%s) ...\n' "$name" "$ver"
+}
+
 cmd_install() {
     ensure_dirs; load_conf
     db_sync_dpkg
     [ -d "$PKG_DB" ] || mkdir -p "$PKG_DB"
     index_rebuild_all
 
-    local pkgs=()
+    local pkgs=() keep_cache=0
     for arg in "$@"; do
         case "$arg" in
             -y|--yes|-q|--quiet|-f|--fix-broken) ;; # apt compatibility flags
+            --keep-cache) keep_cache=1 ;;
             -*) die "unknown option: $arg" ;;
             *) pkgs+=("$arg") ;;
         esac
@@ -190,6 +206,40 @@ cmd_install() {
 
     if [ "${#to_install[@]}" -eq 0 ]; then
         printf '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n'
+        return 0
+    fi
+
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        local plan_out
+        plan_out="$(python3 -B "$PKG_LIB/pkg_core.py" plan "$PKG_INDEX" "$PKG_DB" "$PKG_CACHE" "$PREFIX" "${to_install[@]}")" \
+            || die "dependency resolution failed; no packages were installed"
+        if [ -z "$plan_out" ]; then
+            printf '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n'
+            return 0
+        fi
+        local new_pkgs=() total_bytes=0 fetch_rows=() install_rows=() line
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            local pn pfn purl psha pcache psz pver parch pcached
+            IFS='|' read -r pn pfn purl psha pcache psz pver parch pcached <<< "$line"
+            new_pkgs+=("$pn")
+            total_bytes=$((total_bytes + psz))
+            install_rows+=("$pn|$pver|$parch|$pcache")
+            [ "$pcached" = "1" ] || fetch_rows+=("$pn|$pfn|$purl|$psha|$pcache|$psz")
+        done <<< "$plan_out"
+        printf 'The following NEW packages will be installed:\n'
+        printf '  %s\n' "${new_pkgs[*]}"
+        if [ "$total_bytes" -gt 0 ]; then
+            printf 'Need to get %s of archives.\n' "$(human_size "$total_bytes")"
+        fi
+        if [ "${#fetch_rows[@]}" -gt 0 ]; then
+            printf '%s\n' "${fetch_rows[@]}" | fetch_batch
+        fi
+        for line in "${install_rows[@]}"; do
+            local pn pver parch pcache
+            IFS='|' read -r pn pver parch pcache <<< "$line"
+            install_cached_deb "$pn" "$pver" "$parch" "$pcache" "$keep_cache"
+        done
         return 0
     fi
 
@@ -240,8 +290,45 @@ cmd_upgrade() {
     db_sync_dpkg
     index_rebuild_all
     [ -n "$(index_tsvs)" ] || die "no index (run: pkg update)"
+    local keep_cache=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes|-q|--quiet|-f|--fix-broken) ;;
+            --keep-cache) keep_cache=1 ;;
+            *) die "unknown option: $arg" ;;
+        esac
+    done
     printf 'Reading package lists... Done\n'
     printf 'Building dependency tree... Done\n'
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        local plan_out
+        plan_out="$(python3 -B "$PKG_LIB/pkg_core.py" plan "$PKG_INDEX" "$PKG_DB" "$PKG_CACHE" "$PREFIX" --upgrade)" \
+            || die "upgrade planning failed"
+        if [ -z "$plan_out" ]; then
+            printf '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n'
+            return 0
+        fi
+        local up_pkgs=() fetch_rows=() install_rows=() line
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            local pn pfn purl psha pcache psz pver parch pcached
+            IFS='|' read -r pn pfn purl psha pcache psz pver parch pcached <<< "$line"
+            up_pkgs+=("$pn")
+            install_rows+=("$pn|$pver|$parch|$pcache")
+            [ "$pcached" = "1" ] || fetch_rows+=("$pn|$pfn|$purl|$psha|$pcache|$psz")
+        done <<< "$plan_out"
+        printf 'The following packages will be upgraded:\n'
+        printf '  %s\n' "${up_pkgs[*]}"
+        if [ "${#fetch_rows[@]}" -gt 0 ]; then
+            printf '%s\n' "${fetch_rows[@]}" | fetch_batch
+        fi
+        for line in "${install_rows[@]}"; do
+            local pn pver parch pcache
+            IFS='|' read -r pn pver parch pcache <<< "$line"
+            install_cached_deb "$pn" "$pver" "$parch" "$pcache" "$keep_cache"
+        done
+        return 0
+    fi
     local name cur_ver entry line repo_ver c to_upgrade=() f
     for f in "$PKG_DB"/*.meta; do
         [ -e "$f" ] || continue
@@ -311,6 +398,10 @@ cmd_remove() {
 # ---------------------------------------------------------------- queries
 cmd_list() {
     local pat="${1:-}" f
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" search "$PKG_INDEX" "$pat"
+        return $?
+    fi
     for f in $(index_files); do
         index_parse "$f" | awk -F'\t' -v p="$pat" 'p == "" || $1 ~ p { printf "%-24s %s\n", $1, $2 }'
     done | sort -u
@@ -337,6 +428,10 @@ cmd_info() {
 cmd_search() {
     [ "$#" -ge 1 ] || die "search: need a pattern"
     local pat="$1" f
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" search "$PKG_INDEX" "$pat"
+        return $?
+    fi
     for f in $(index_files); do
         index_parse "$f" | awk -F'\t' -v p="$pat" '$1 ~ p { printf "%-24s %s\n", $1, $2 }'
     done | sort -u

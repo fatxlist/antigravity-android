@@ -14,7 +14,7 @@
 
   [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
   [![Arch](https://img.shields.io/badge/ARM64-v8.0--A%2B-blue?style=flat-square)](https://arm.com)
-  [![Release](https://img.shields.io/badge/Версия-2.5.2-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
+  [![Release](https://img.shields.io/badge/Версия-2.6.0-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
   [![Core](https://img.shields.io/badge/Ядро-v2.35.2-0A7EA4?style=flat-square)](modules/core)
   [![CI](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml)
   [![License](https://img.shields.io/badge/Лицензия-Apache_2.0-orange?style=flat-square)](LICENSE)
@@ -43,10 +43,10 @@
 
 * **Ядро и веб-слой v2.35.2:** Обновлённый `language_server` и веб-бандл с loopback sidecar-прокси, восстановлением потоков SSE (`resume-stream-recovery`), поддержкой BiDi/RTL-разметки и улучшениями апстрима v2.35.x.
 * **Нативные MCP-серверы:** Автоматическая настройка `agy-mcp-android` (устройство, UI, уведомления, шлюз) и `agy-mcp-browser` (`chrome_devtools`) в `~/.gemini/config/mcp_config.json` со встроенными скиллами агента.
-* **Мобильный UX:** Голосовой ввод и фоновый голосовой сервис, интерактивные уведомления подтверждения действий и субагентов (`Approve` / `Deny` / ответ прямо в шторке / `Cancel`), кликабельные уведомления с возвратом в чат, панель доп. клавиш, вставка изображений из буфера, приём файлов через Share Sheet, локальный предпросмотр HTML, переключатель Desktop Mode и защита от случайного выхода двойным нажатием «Назад».
-* **Шлюз и микро-демон:** Многопоточный `SystemGatewayServer` (`doctor`/`repair`, асинхронные задачи `exec_*`, уведомления) и легковесный `agy-daemon` с диспетчеризацией задач через ConnectRPC, триггерами по расписанию/файлам/GitHub и контролем `resolv.conf`.
+* **Мобильный UX:** Хранилище аккаунтов и переключатель профилей в Settings, кликабельные локальные пути и карточка установки APK, расширенная поддержка вложений в чате, значок для видео-вложений, баннер переподключения при обрыве сети, голосовой ввод и фоновый голосовой сервис, интерактивные уведомления подтверждения действий и субагентов (`Approve` / `Deny` / ответ прямо в шторке / `Cancel`), панель доп. клавиш, вставка изображений из буфера, приём файлов через Share Sheet, локальный предпросмотр HTML, переключатель Desktop Mode, пассивная проверка обновлений на GitHub и защита от случайного выхода двойным нажатием «Назад».
+* **Шлюз и микро-демон:** Многопоточный `SystemGatewayServer` (`doctor`/`repair`, асинхронные задачи `exec_*`, уведомления), ротация отчётов о сбоях (`CrashRecorder`, не более 10 файлов) и легковесный `agy-daemon` (`fcntl.flock`, диспетчеризация задач через ConnectRPC, триггеры по расписанию/файлам/GitHub и контроль `resolv.conf`).
 * **Поддержка ARMv8.0-A:** Прозрачная эмуляция атомиков и SIMD (`liblse_compat.so` с флагом `SA_ONSTACK`), совместимость системных вызовов seccomp (`faccessat`/`fchmodat`) и перенацеливание PTY-оболочки.
-* **Встроенный `pkg` и опциональный Shizuku:** Менеджер пакетов Termux (`git`, `python`, `nodejs`, `clang` и др.), а также необязательный ADB-доступ (`uid=2000`) через Shizuku без root.
+* **Встроенный `pkg` и опциональный Shizuku:** Ускоренный менеджер пакетов Termux (`pkg_core.py`, параллельная загрузка `curl -Z --http2`, `--keep-cache`), а также необязательный ADB-доступ (`uid=2000`) через Shizuku без root.
 
 ---
 

@@ -11,7 +11,8 @@ Android WebView runtime optimization patch concatenated via `web/src.manifest` i
 - `[bundle.js:__agWebOptimizations]` Public metadata object on `window`: `{ installed: true, version: '3.2.0' }`.
 - `[bundle.js:__agPassivePatched]` / `[bundle.js:__agGated]` / `[bundle.js:__agFocusGuarded]` Idempotency marker flags placed on `EventTarget.prototype`, wrapped `window.ResizeObserver`, and `HTMLElement.prototype`.
 - `[bundle.js:__agTouchSynthetic]` Event marker checked by `recordTap` in `installFocusGuard` to ignore synthetic touch events.
-- `[bundle.js:installStyles]` Injects `<style data-agy="web-optimizations">` defining `:root` custom properties `--agy-safe-top`, `--agy-safe-bottom`, `--agy-safe-left`, `--agy-safe-right` from `--agy-inset-*` / `env(safe-area-inset-*)` and reacting to `html.agy-extra-keys`.
+- `[bundle.js:installStyles]` Injects `<style data-agy="web-optimizations">` defining `:root` custom properties `--agy-safe-top`, `--agy-safe-bottom`, `--agy-safe-left`, `--agy-safe-right` from `--agy-inset-*` / `env(safe-area-inset-*)`, reacting to `html.agy-extra-keys`, and hiding broken `data:video/` thumbnails while styling `.agy-video-badge`.
+- `[bundle.js:installMediaErrorFallback]` Attaches a capture-phase `error` listener on `document` that marks failed video `<img>` elements (`data-agy-broken-video="true"`, `display: none`) and appends `<span class="agy-video-badge" data-agy-video-badge="true">` with the uppercase format label.
 - `[bidi.js:installBidi]` Injects `<style data-agy="bidi-fix">` for automatic BiDi prose alignment and LTR code/terminal isolation.
 - `[viewport.js:installViewport]` / `[viewport.js:applyViewportHeight]` Maintains `--agy-vvh` on `document.documentElement.style` using shared IIFE-local `[bundle.js:global]` and `[bundle.js:doc]`.
 

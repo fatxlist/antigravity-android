@@ -395,6 +395,27 @@ public class MainActivity extends Activity
         }, 400);
     }
 
+    /** Restarts the core process cleanly (without deleting runtime marker) after switching saved accounts. */
+    public void restartCorePreservingRuntime() {
+        handler.removeCallbacks(splashWatchdog);
+        handler.removeCallbacks(splashDeadlineTask);
+        splash.clearFatal();
+        appLoaded = false;
+        pageFinished = false;
+        uiReady = false;
+        loadedGeneration = -1;
+        splashDeadline = System.currentTimeMillis() + SPLASH_TIMEOUT_MS;
+        splash.showLoading();
+        CoreServiceLauncher.stop(this);
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                startCoreService();
+                watchCore();
+            }
+        }, 300);
+    }
+
     /**
      * Page load finished, but the Web UI has NOT necessarily painted yet (the
      * app bundle is large), so the splash is NOT dismissed here. Dismissal is
@@ -431,6 +452,7 @@ public class MainActivity extends Activity
         if (VoiceForegroundService.isActive()) {
             notifyVoiceServiceStateChanged(true, VoiceForegroundService.isMuted());
         }
+        UpdateChecker.checkSilentlyIfDue(this);
     }
 
     public void setExtraKeysVisible(boolean visible) {

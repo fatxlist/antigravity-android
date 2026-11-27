@@ -13,7 +13,9 @@ var api = {
   syncCsrf: syncCsrf,
   parseEndpointSpec: parseEndpointSpec,
   triggerStreamRecovery: typeof triggerStreamRecovery === 'function' ? triggerStreamRecovery : function () {},
-  getActiveStreamCount: function () { return typeof activeStreamClosers !== 'undefined' ? activeStreamClosers.size : 0; }
+  getActiveStreamCount: function () { return typeof activeStreamClosers !== 'undefined' ? activeStreamClosers.size : 0; },
+  notifyNetworkFailure: typeof notifyNetworkFailure === 'function' ? notifyNetworkFailure : function () {},
+  notifyNetworkSuccess: typeof notifyNetworkSuccess === 'function' ? notifyNetworkSuccess : function () {}
 };
 
 window.__agBridgeCore = api;

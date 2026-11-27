@@ -186,6 +186,66 @@ else
 fi
 rm -rf "$BRIDGE_TMP"
 
+# ---- pkg_core.py stage-install, prefix rewrite & path-traversal rejection ----
+if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+    STG_TMP="$(mktemp -d)"
+    python3 -B -c '
+import io, os, sys, tarfile, time
+out_dir = sys.argv[1]
+def make_deb(deb_path, entries):
+    ctl_bio = io.BytesIO()
+    with tarfile.open(fileobj=ctl_bio, mode="w:gz") as tf:
+        ctl = b"Package: demo\nVersion: 1.2.3\nArchitecture: aarch64\n"
+        ti = tarfile.TarInfo("./control")
+        ti.size = len(ctl)
+        tf.addfile(ti, io.BytesIO(ctl))
+    data_bio = io.BytesIO()
+    with tarfile.open(fileobj=data_bio, mode="w:gz") as tf:
+        for name, data, mode, linkname in entries:
+            ti = tarfile.TarInfo(name)
+            ti.mode = mode
+            if linkname is not None:
+                ti.type = tarfile.SYMTYPE
+                ti.linkname = linkname
+            else:
+                ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data) if linkname is None else None)
+    def ar_hdr(name, sz):
+        return f"{name:<16}{0:<12}{0:<6}{0:<6}{100644:<8}{sz:<10}`\n".encode("ascii")
+    with open(deb_path, "wb") as f:
+        f.write(b"!<arch>\n")
+        for mname, mbytes in [("debian-binary", b"2.0\n"), ("control.tar.gz", ctl_bio.getvalue()), ("data.tar.gz", data_bio.getvalue())]:
+            f.write(ar_hdr(mname, len(mbytes)))
+            f.write(mbytes)
+            if len(mbytes) % 2:
+                f.write(b"\n")
+make_deb(os.path.join(out_dir, "good.deb"), [
+    ("./data/data/com.termux/files/usr/bin/demo", b"#!/data/data/com.termux/files/usr/bin/sh\necho ok\n", 0o755, None),
+    ("./data/data/com.termux/files/usr/bin/demo-link", b"", 0o777, "/data/data/com.termux/files/usr/bin/demo"),
+])
+make_deb(os.path.join(out_dir, "bad.deb"), [
+    ("./etc/passwd", b"x", 0o644, None),
+])
+' "$STG_TMP"
+    mkdir -p "$STG_TMP/prefix" "$STG_TMP/db"
+    if python3 -B "$PKG_LIB/pkg_core.py" stage-install \
+            "$STG_TMP/good.deb" "$STG_TMP/prefix" "$STG_TMP/db" demo 1.2.3 aarch64 --strip 6 \
+            && grep -Fq "#!$STG_TMP/prefix/bin/sh" "$STG_TMP/prefix/bin/demo" \
+            && [ "$(readlink "$STG_TMP/prefix/bin/demo-link")" = "$STG_TMP/prefix/bin/demo" ] \
+            && [ -f "$STG_TMP/db/demo.meta" ]; then
+        ok "pkg_core stage-install rewrites prefix & symlinks"
+    else
+        bad "pkg_core stage-install rewrites prefix & symlinks"
+    fi
+    if python3 -B "$PKG_LIB/pkg_core.py" stage-install \
+            "$STG_TMP/bad.deb" "$STG_TMP/prefix" "$STG_TMP/db" bad 1.0 aarch64 --strip 6 >/dev/null 2>&1; then
+        bad "pkg_core stage-install rejects outside-prefix member"
+    else
+        ok "pkg_core stage-install rejects outside-prefix member"
+    fi
+    rm -rf "$STG_TMP"
+fi
+
 rm -rf "$(dirname "$PREFIX")"
 printf '== failures: %s ==\n' "$fail"
 [ "$fail" = 0 ]

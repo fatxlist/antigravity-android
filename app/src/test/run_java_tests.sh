@@ -47,10 +47,19 @@ PYEOF
 find "$WORK_DIR/gen" "$PROJECT_ROOT/app/src/main/java" "$SCRIPT_DIR/java" \
     -name "*.java" > "$WORK_DIR/sources.txt"
 
-mkdir -p "$WORK_DIR/classes"
+mkdir -p "$WORK_DIR/classes" "$WORK_DIR/stubs"
 javac -source 8 -target 8 -encoding UTF-8 -Xlint:all,-deprecation,-options,-serial -Werror \
     -cp "$ANDROID_JAR" \
     -d "$WORK_DIR/classes" \
     "@$WORK_DIR/sources.txt"
 
-java -cp "$WORK_DIR/classes:$ANDROID_JAR" com.agy.UnitTests
+if [ -d "$SCRIPT_DIR/stubs" ]; then
+    find "$SCRIPT_DIR/stubs" -name "*.java" > "$WORK_DIR/stubs_sources.txt"
+    if [ -s "$WORK_DIR/stubs_sources.txt" ]; then
+        javac -source 8 -target 8 -encoding UTF-8 -Xlint:all,-deprecation,-options,-serial -Werror \
+            -d "$WORK_DIR/stubs" \
+            "@$WORK_DIR/stubs_sources.txt"
+    fi
+fi
+
+java -cp "$WORK_DIR/classes:$WORK_DIR/stubs:$ANDROID_JAR" com.agy.UnitTests

@@ -114,4 +114,31 @@ public final class UriDispatcher {
             return false;
         }
     }
+
+    /** Launches Android's system package installer for a readable {@code .apk} file. */
+    public static boolean installApk(Context context, File apkFile) {
+        if (context == null || apkFile == null || !apkFile.isFile()) {
+            return false;
+        }
+        try {
+            Uri contentUri = AppFileProvider.getUriForFile(context, apkFile);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(contentUri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            context.startActivity(intent);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Cannot install APK: " + apkFile, e);
+            return false;
+        }
+    }
+
+    /** Opens the parent folder of {@code target} (or {@code target} itself if it is a directory). */
+    public static boolean openParentDirectory(Context context, File target) {
+        if (context == null || target == null) {
+            return false;
+        }
+        File dir = target.isDirectory() ? target : target.getParentFile();
+        return dir != null && dir.isDirectory() && openDirectory(context, dir);
+    }
 }

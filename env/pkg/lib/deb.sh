@@ -24,6 +24,10 @@ ar_slice() {
 
 # ar_members FILE -> member names
 ar_members() {
+    if command -v python3 >/dev/null 2>&1 && [ -f "${PKG_LIB:-}/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" deb-members "$1"
+        return $?
+    fi
     ar_index "$1" | awk -F'\t' '{ print $1 }'
 }
 
@@ -58,6 +62,10 @@ deb_member_name() { # FILE control|data
 }
 
 deb_field() { # FILE FIELD -> value (authoritative control, single ar/decompress pass)
+    if command -v python3 >/dev/null 2>&1 && [ -f "${PKG_LIB:-}/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" deb-field "$1" "$2"
+        return $?
+    fi
     local f="$1" field="$2" entry m rest off sz val
     entry="$(_deb_find_member "$f" control)"
     [ -n "$entry" ] || return 1
@@ -122,6 +130,10 @@ _deb_validate_and_list() {
 }
 
 deb_validate_data() { # FILE -- reject absolute/traversal/non-prefix entries
+    if command -v python3 >/dev/null 2>&1 && [ -f "${PKG_LIB:-}/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" deb-validate "$1"
+        return $?
+    fi
     local entry m rest off sz
     entry="$(_deb_find_member "$1" data)"
     [ -n "$entry" ] || return 1
@@ -149,7 +161,12 @@ deb_install_data() { # FILE DEST STRIP LIST_OUT -- single ar scan: validate+list
 }
 
 deb_extract_data() { # FILE DEST [STRIP]
-    local entry m rest off sz strip="${3:-${PKG_DEB_STRIP:-6}}"
+    local strip="${3:-${PKG_DEB_STRIP:-6}}"
+    if command -v python3 >/dev/null 2>&1 && [ -f "${PKG_LIB:-}/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" deb-extract "$1" "$2" --strip "$strip"
+        return $?
+    fi
+    local entry m rest off sz
     entry="$(_deb_find_member "$1" data)"
     [ -n "$entry" ] || return 1
     m="${entry%%	*}"
@@ -162,7 +179,12 @@ deb_extract_data() { # FILE DEST [STRIP]
 }
 
 deb_files() { # FILE -> relative paths under the stripped data prefix
-    local entry m rest off sz strip="${PKG_DEB_STRIP:-6}" tmp_list
+    local strip="${PKG_DEB_STRIP:-6}"
+    if command -v python3 >/dev/null 2>&1 && [ -f "${PKG_LIB:-}/pkg_core.py" ]; then
+        python3 -B "$PKG_LIB/pkg_core.py" deb-files "$1" --strip "$strip"
+        return $?
+    fi
+    local entry m rest off sz tmp_list
     entry="$(_deb_find_member "$1" data)"
     [ -n "$entry" ] || return 1
     m="${entry%%	*}"

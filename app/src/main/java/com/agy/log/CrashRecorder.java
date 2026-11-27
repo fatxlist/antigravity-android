@@ -9,6 +9,8 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -17,6 +19,7 @@ import java.util.List;
 public final class CrashRecorder {
 
     private static final String TAG = "CrashRecorder";
+    public static final int MAX_CRASH_REPORTS = 10;
     private static volatile JSONObject latestCrash = null;
 
     private CrashRecorder() {
@@ -79,9 +82,44 @@ public final class CrashRecorder {
             try (FileOutputStream fos = new FileOutputStream(crashFile)) {
                 fos.write(report.toString(2).getBytes(StandardCharsets.UTF_8));
             }
+            pruneOldReports(crashesDir, MAX_CRASH_REPORTS);
             Log.i(TAG, "Crash report persisted: " + crashFile.getAbsolutePath());
         } catch (Exception e) {
             Log.w(TAG, "failed to persist crash report: " + e.getMessage());
+        }
+    }
+
+    /** Retains only the newest {@code maxReports} crash_*.json files in {@code crashesDir}. */
+    public static void pruneOldReports(File crashesDir, int maxReports) {
+        if (crashesDir == null || !crashesDir.isDirectory()) {
+            return;
+        }
+        File[] files = crashesDir.listFiles();
+        if (files == null || files.length == 0) {
+            return;
+        }
+        int keep = Math.max(0, maxReports);
+        List<File> reports = new java.util.ArrayList<>();
+        for (File f : files) {
+            if (f != null && f.isFile() && f.getName().startsWith("crash_") && f.getName().endsWith(".json")) {
+                reports.add(f);
+            }
+        }
+        if (reports.size() <= keep) {
+            return;
+        }
+        File[] sorted = reports.toArray(new File[0]);
+        Arrays.sort(sorted, new Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                int byTime = Long.compare(a.lastModified(), b.lastModified());
+                return byTime != 0 ? byTime : a.getName().compareTo(b.getName());
+            }
+        });
+        int toDelete = sorted.length - keep;
+        for (int i = 0; i < toDelete; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            sorted[i].delete();
         }
     }
 }
