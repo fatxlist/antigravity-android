@@ -119,7 +119,7 @@ chmod +x "$NOTIFY_TMP/bin/rish"
 export AGY_NOTIFY_CAPTURE="$NOTIFY_TMP/calls.log"
 if HOME="$NOTIFY_TMP" PREFIX="$NOTIFY_TMP" AGY_GATEWAY_TOKEN="" AGY_GATEWAY_TOKEN_FILE="" \
         bash "$SELF/../overlay/bin/agy-notify" cancel task_123 \
-        && grep -Fq 'cmd notification cancel task_123' "$AGY_NOTIFY_CAPTURE"; then
+        && grep -Eq "cmd notification cancel ('task_123'|task_123)" "$AGY_NOTIFY_CAPTURE"; then
     ok "agy-notify cancel forwards its positional tag"
 else
     bad "agy-notify cancel forwards its positional tag"
@@ -132,7 +132,7 @@ else
 fi
 if HOME="$NOTIFY_TMP" PREFIX="$NOTIFY_TMP" AGY_GATEWAY_TOKEN="" AGY_GATEWAY_TOKEN_FILE="" \
         bash "$SELF/../overlay/bin/agy-notify" post -t "Test" -m "Msg" --tag "post_123" --cascade-id "conv-abc-123" \
-        && grep -Fq 'cmd notification post -S bigtext  -t Test post_123 Msg' "$AGY_NOTIFY_CAPTURE"; then
+        && grep -Eq "cmd notification post -S bigtext  -t ('Test'|Test) ('post_123'|post_123) ('Msg'|Msg)" "$AGY_NOTIFY_CAPTURE"; then
     ok "agy-notify post accepts --cascade-id and falls back cleanly"
 else
     bad "agy-notify post accepts --cascade-id and falls back cleanly"

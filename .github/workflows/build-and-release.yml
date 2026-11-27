@@ -64,6 +64,16 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Rust Toolchain (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/agy
+
       - name: Install Android Build Tools & System Utilities
         run: |
           sudo apt-get update
@@ -114,6 +124,8 @@ jobs:
           bash modules/io/tests/run_all.sh
           bash modules/env/tests/run_all.sh
           bash modules/builder/tests/run_all.sh
+          cargo test --manifest-path native/agy/Cargo.toml
+          REQUIRE_NATIVE=1 bash modules/builder/04b_build_native.sh
           python3 -B -m unittest discover -s env/tests -v
           bash env/build.sh assets
           bash env/tests/invariant
@@ -132,13 +144,13 @@ jobs:
           if [ -n "$AGY_RELEASE_KEYSTORE_B64" ]; then
             echo "$AGY_RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
             export AGY_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
-            bash build.sh
+            bash build.sh --require-native
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             echo "[ERROR] Tagged release builds require AGY_RELEASE_KEYSTORE_B64, AGY_RELEASE_KEY_ALIAS, AGY_RELEASE_KEY_PASS, and AGY_RELEASE_STORE_PASS secrets." >&2
             exit 1
           else
             echo "[CI] No AGY_RELEASE_* secrets configured; building verification APK with --allow-debug-sign."
-            bash build.sh --allow-debug-sign
+            bash build.sh --allow-debug-sign --require-native
           fi
 
       - name: Compute Cryptographic Checksums

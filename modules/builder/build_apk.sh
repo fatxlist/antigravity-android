@@ -22,6 +22,7 @@ export LC_ALL=C.UTF-8
 export FAST_BUILD=0
 export DEV_MODE=0
 export ALLOW_DEBUG_SIGN="${ALLOW_DEBUG_SIGN:-0}"
+export REQUIRE_NATIVE="${REQUIRE_NATIVE:-0}"
 export CUSTOM_PREFIX=""
 export CUSTOM_OUT=""
 
@@ -37,6 +38,10 @@ while [ $# -gt 0 ]; do
             ;;
         --allow-debug-sign)
             export ALLOW_DEBUG_SIGN=1
+            shift
+            ;;
+        --require-native)
+            export REQUIRE_NATIVE=1
             shift
             ;;
         --prefix)
@@ -146,6 +151,10 @@ bash "$SCRIPT_DIR/03_compile_java.sh" "$BUILD_DIR/obj" "$BUILD_DIR/gen" "$APP_DI
 # Phase 04: D8 Dexing
 echo -e "\n>>> [4/8] Converting Bytecode to classes.dex (D8)..."
 bash "$SCRIPT_DIR/04_dex.sh" "$BUILD_DIR/dex" "$BUILD_DIR/obj" "$TOOLS_DIR/r8.jar" "$TOOLS_DIR/android.jar" 24
+
+# Phase 04b: Build Native Rust Helper (optional unless --require-native)
+echo -e "\n>>> [4b/8] Building Native Rust Helper..."
+bash "$SCRIPT_DIR/04b_build_native.sh"
 
 # Phase 05: Stage Assets
 echo -e "\n>>> [5/8] Staging Runtime and Web Assets..."

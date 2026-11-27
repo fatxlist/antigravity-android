@@ -2,11 +2,25 @@
 # agy-fix-paths [PATH...] -- rewrite hardcoded Android app prefixes to $PREFIX.
 set -uo pipefail
 
+_agy_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 if [ -z "${PREFIX:-}" ]; then
-    _agy_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
     PREFIX="$(cd -- "$_agy_script_dir/.." 2>/dev/null && pwd)"
-    unset _agy_script_dir
 fi
+
+if [ "${AGY_DISABLE_NATIVE:-0}" != "1" ]; then
+    _agy_bin="${AGY_NATIVE_BIN:-}"
+    if [ -z "$_agy_bin" ] && [ -x "$_agy_script_dir/agy" ]; then
+        _agy_bin="$_agy_script_dir/agy"
+    elif [ -z "$_agy_bin" ] && [ -x "$PREFIX/bin/agy" ]; then
+        _agy_bin="$PREFIX/bin/agy"
+    fi
+    if [ -n "$_agy_bin" ] && [ -x "$_agy_bin" ]; then
+        export PREFIX
+        exec "$_agy_bin" fix-paths "$@"
+    fi
+    unset _agy_bin
+fi
+unset _agy_script_dir
 PATTERN='/data/(data|user/[0-9]+)/[^/]*/files/usr'
 ENV_PATTERN='^#! */usr/bin/env[[:space:]]+(-S[[:space:]]+)?[^[:space:]]+'
 

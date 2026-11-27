@@ -19,6 +19,8 @@ env/bootstrap/bootstrap.tar.gz
 web/generated/main.js
 web.old_backup/
 env/dist/
+native/agy/target/
+env/overlay/bin/agy
 
 # Python cache
 __pycache__/
