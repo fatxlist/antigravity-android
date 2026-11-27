@@ -15,7 +15,7 @@
   [![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
   [![Arch](https://img.shields.io/badge/ARM64-v8.0--A%2B-blue?style=flat-square)](https://arm.com)
   [![Release](https://img.shields.io/badge/App-v2.5.2-blueviolet?style=flat-square)](https://github.com/fatxlist/antigravity-android/releases)
-  [![Core](https://img.shields.io/badge/Core-v2.34.0-0A7EA4?style=flat-square)](modules/core)
+  [![Core](https://img.shields.io/badge/Core-v2.35.2-0A7EA4?style=flat-square)](modules/core)
   [![CI](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/fatxlist/antigravity-android/actions/workflows/build-and-release.yml)
   [![License](https://img.shields.io/badge/License-Apache_2.0-orange?style=flat-square)](LICENSE)
 
@@ -41,7 +41,7 @@ No PRoot, chroot, or virtualization overhead. Antigravity runs **bare-metal insi
 
 ### Highlights
 
-* **Core & Web v2.34.0:** Updated `language_server` core and web bundle with loopback sidecar cookie proxying, SSE stream resume/recovery, and full BiDi/RTL typography support.
+* **Core & Web v2.35.2:** Updated `language_server` core and web bundle with loopback sidecar cookie proxying, SSE stream resume/recovery, full BiDi/RTL typography support, and upstream v2.35.x harness/UI improvements.
 * **Native MCP Servers:** Auto-seeded `agy-mcp-android` (device, UI, notifications, gateway tools) and `agy-mcp-browser` (`chrome_devtools`) in `~/.gemini/config/mcp_config.json` with bundled agent skills.
 * **Mobile-First Agent UX:** Voice dictation with foreground voice service, interactive tool-approval and subagent notifications (`Approve` / `Deny` / inline reply / `Cancel`), clickable notifications returning to chat, extra keys bar, clipboard image paste, Android Share Sheet intake, local HTML/web preview dialog, Desktop Mode toggle, and double-back exit confirmation.
 * **Gateway & Micro-Daemon:** Multi-threaded `SystemGatewayServer` (`doctor`/`repair`, async `exec_*` tasks, clickable notifications) and lightweight `agy-daemon` with ConnectRPC task dispatch, cron/file/GitHub triggers, and `resolv.conf` watchdog.
@@ -158,7 +158,7 @@ antigravity-android/
 - `web`: [./web/README.md](./web/README.md) - Local React SPA shell (`index.html`), manifest-driven bundle builder (`src.manifest`, `build.sh` -> `web/generated/**`), Desktop Mode `patch_main.py`, boot/core/mobile/theme/IME patches (`./web/src/README.md`), AudioWorklet/Myers diff/page automation scripts, and PDF.js/Shiki workers (`./web/workers/README.md`).
 
 ## Global Invariants
-- **Single Source of Truth & Version Parity**: `[config/app.env:APP_VERSION_NAME]` and `[config/app.env:CORE_VERSION]` (`2.5.2` / `2.34.0`) drive `[modules/builder/01_gen_config.py:main]` and are enforced against `README.md`, `README.ru.md`, `RELEASE_NOTES.md`, and `refs/tags/v*` by `[modules/builder/check_versions.py:main]`.
+- **Single Source of Truth & Version Parity**: `[config/app.env:APP_VERSION_NAME]` and `[config/app.env:CORE_VERSION]` (`2.5.2` / `2.35.2`) drive `[modules/builder/01_gen_config.py:main]` and are enforced against `README.md`, `README.ru.md`, `RELEASE_NOTES.md`, and `refs/tags/v*` by `[modules/builder/check_versions.py:main]`.
 - **Android W^X & ARMv8.0-A Compatibility**: `[app/src/main/AndroidManifest.xml:targetSdkVersion]` pins `targetSdkVersion="28"` so Android allows `exec` from `files/runtime/bin`; `[modules/patches/pipeline.py:ACTIVE_MODULES]` patches `language_server` (`faccessat`, `fchmodat`, `sigill_handler`, `resolv_redirect`, `crash_suppressor`, `pty_shell`) while `[env/liblse_compat/liblse_compat.c:sigill_handler]` emulates ARMv8.1-8.4 LSE/SIMD instructions on `SIGILL`.
 - **Loopback Isolation, TLS Pinning & Token Auth**: `[app/src/main/java/com/agy/gateway/SystemGatewayServer.java:start]` binds strictly to `127.0.0.1` (`45160`/`45161`) with constant-time token verification against `0600` `logs/gateway.token`; `[app/src/main/java/com/agy/core/CoreReadyProbe.java:configurePinnedLoopbackTls]` pins loopback core HTTPS to `res/raw/agy_core_cert`; `[app/src/main/java/com/agy/bridge/AndroidBridge.java:matchesNativeBridgeToken]` gates sensitive WebView calls with a per-instance 256-bit token; `[app/src/main/java/com/agy/util/AppFileProvider.java:isAllowedPath]` blocks `.gemini`, `gateway.token`, `core.state.json`, `approvals.json`, `shared_prefs`, and `databases`.
 - **No-Exec / FUSE Containment & Fail-Closed Signing**: `[modules/io/core_bus/event_broker.py:EventBroker.publish]` and `[modules/io/inputs/fifo_input.py:get_safe_pipe_path]` invoke `.sh` scripts via explicit shell interpreters and relocate FIFOs off `/storage/`/`/sdcard/`; `[modules/builder/build_apk.sh:KEYSTORE]` and `[modules/builder/build_apk.sh:ALLOW_DEBUG_SIGN]` refuse production release builds without explicit `AGY_RELEASE_*` credentials.

@@ -26,7 +26,7 @@ modules/core/
 │   ├── glibc_deps.list         # Список требуемых glibc .so библиотек
 │   └── shims.list              # Список устанавливаемых исполняемых шимов
 ├── pristine/                   # Оригинальный неизмененный архив ядра
-│   └── language_server.tar.gz  # Pristine aarch64 language_server (~205 MB unpacked, 215438000 bytes)
+│   └── language_server.tar.gz  # Pristine aarch64 language_server (~206 MB unpacked, 216421040 bytes)
 ├── unpack/                     # Модули распаковки и прав доступа
 │   ├── archive_detector.py     # Определение формата (tar_gz, elf, unknown)
 │   ├── extractor.py            # Извлечение core-бинарника из tar.gz / raw ELF
@@ -192,7 +192,7 @@ python3 modules/core/validate/verify_pipeline.py
 ## Invariants
 - `[unpack/extractor.py:extract_core]` / `[unpack/archive_detector.py:detect_type]`: Only gzip tar archives (`b"\x1f\x8b"`) containing a matching basename member (default `"language_server"`) and raw ELF binaries (`b"\x7fELF"`) are accepted; extracted outputs must be non-empty regular files.
 - `[validate/elf_header.py:validate_elf_header]` / `[validate/elf_arch.py:validate_aarch64]` / `[validate/elf_compat.py:validate_executable_type]`: Core binaries must be 64-bit (`EI_CLASS == 2`), little-endian (`EI_DATA == 1`), AArch64 (`EM_AARCH64 == 183`), and `ET_EXEC` (`2`) or `ET_DYN` (`3`), raising `ValueError` on violation.
-- `[validate/verify_pipeline.py:run_pipeline]` / `[spec/checksums.json:archive]`: E2E verification pins `pristine/language_server.tar.gz` to SHA-256 `6847c8e03731e801465a253cbb8c286ffa63c9ee4567dd7a8d5f26ccadaba390` and validates both extracted `language_server` and `glibc/ld-linux-aarch64.so.1`.
+- `[validate/verify_pipeline.py:run_pipeline]` / `[spec/checksums.json:archive]`: E2E verification pins `pristine/language_server.tar.gz` to SHA-256 `4acb2938abec244d0798450d5019d61736d9e786d0cffc4f090d79c18fcd6911` and validates both extracted `language_server` and `glibc/ld-linux-aarch64.so.1`.
 - `[bundle/layout.py:SUBDIRS]` / `[bundle/assemble.py:assemble_runtime]`: Runtime bundle layout is fixed to `("bin", "lib", "certs", "seed", "etc")` plus root `manifest.json`; `pack_binaries.py` installs the loader as both `bin/libloader.so` and `bin/ld-linux-aarch64.so.1`, normalizes copied shell scripts to LF, and preserves symlinks/delegators to `xdg-open`.
 - `[manifest/manifest_builder.py:build_manifest]` / `[manifest/manifest_verifier.py:verify_manifest]`: Manifest schema is `1` with UTC `generated_at` and POSIX `/` relative paths excluding only root `manifest.json`; verification checks all listed files without short-circuiting and does not flag unlisted extra files.
 - `[shims/system/xdg_open.sh:LD_PRELOAD]` / `[shims/privilege/rish.sh:env]`: All shell shims strip `LD_PRELOAD` and `LD_LIBRARY_PATH` before invoking Android `/system/bin/am` or `/system/bin/app_process`; `AGY_SHIM_NO_AM` disables `/system/bin/am` dispatch for testing.

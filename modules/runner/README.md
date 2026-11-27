@@ -103,7 +103,7 @@ stateDiagram-v2
 
 1. **Фаза сборки (Preparation):**
    - Выполняется скриптом `prepare_runtime.py`.
-   - Проверяется кэш пропатченного бинарника (`language_server_patched_cdbad9f7`, префикс `TARGET_SHA[:8]`). Если кэш отсутствует или не проходит проверку SHA-256, из `modules/core/pristine/language_server.tar.gz` извлекается оригинальное ядро и пропускается через `modules/patches/pipeline.py`.
+   - Проверяется кэш пропатченного бинарника (`language_server_patched_454f50f4`, префикс `TARGET_SHA[:8]`). Если кэш отсутствует или не проходит проверку SHA-256, из `modules/core/pristine/language_server.tar.gz` извлекается оригинальное ядро и пропускается через `modules/patches/pipeline.py`.
    - В целевой каталог (`standalone_runtime`) компонуются каталоги: `bin/` (с `liblanguage_server.so`, `libloader.so` и browser-шимами), `lib/` (glibc-библиотеки), `certs/` (`ca-certificates.crt`), `seed/` (шаблоны конфигураций).
    - Проверяется криптографический манифест `manifest.json` по алгоритму SHA-256.
 
@@ -189,7 +189,7 @@ stateDiagram-v2
 ### Проблема 5: Валидация кэша в `prepare_runtime.py` (Устранено)
 - **Файл:** `prepare_runtime.py`
 - **Было:** `TARGET_SHA` не проверялся, любой поврежденный файл с подходящим именем слепо копировался.
-- **Реализовано:** Добавлена поблочная проверка SHA-256 кэшированного бинарника ядра (`cdbad9f7...`, `prepare_runtime.py:TARGET_SHA`). При несовпадении хэша кэш признается невалидным, и ядро заново распаковывается и патчится.
+- **Реализовано:** Добавлена поблочная проверка SHA-256 кэшированного бинарника ядра (`454f50f4...`, `prepare_runtime.py:TARGET_SHA`). При несовпадении хэша кэш признается невалидным, и ядро заново распаковывается и патчится.
 
 ### Проблема 6: Зависание `probe_server.py` при раннем краше сервера (Устранено)
 - **Файл:** `probe_server.py`
@@ -262,7 +262,7 @@ bash modules/runner/stop_core.sh /data/user/0/com.agy.dev/files/standalone_runti
 ---
 
 ## Interface
-- `[prepare_runtime.py:TARGET_SHA]`: Expected SHA-256 hex digest (`"cdbad9f7855ae6d9bb675c42aa34af82f662c5a5cab98ef0d514eb1061690cad"`) used to validate the cached patched core binary.
+- `[prepare_runtime.py:TARGET_SHA]`: Expected SHA-256 hex digest (`"454f50f48856f6e2c091f435d372546de8115011a5d5abb7e054311c3f12764c"`) used to validate the cached patched core binary.
 - `[prepare_runtime.py:DEFAULT_DEST]`: Default standalone runtime destination path (`"/data/user/0/com.agy/files/standalone_runtime"`), plus `[prepare_runtime.py:RUNNER_DIR]` and `[prepare_runtime.py:MODULES_DIR]`.
 - `[prepare_runtime.py:prepare]`: `prepare(dest_runtime_dir: str = DEFAULT_DEST) -> bool` — extracts/patches (or reuses SHA-256-verified cached) core binary, assembles runtime assets into `dest_runtime_dir`, and verifies `manifest.json`.
 - `[prepare_runtime.py:main]`: CLI entry point accepting an optional non-`-`-prefixed destination path argument and optional `[prepare_runtime.py:AGY_CACHE_DIR]` environment variable.

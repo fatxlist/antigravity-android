@@ -41,7 +41,7 @@ modules/patches/
 | **syscalls** | `fchmodat` | `syscall.fchmodat2` (sys_452: `0xd2803880`) | Ретаргетинг на `fchmodat` (sys_53: `0xd28006a0`) |
 | **sigill** | `sigill_handler` | Вызов `rt_sigaction` в рантайме Go | Игнорирование сигнала `SIGILL` (4) для сохранения обработчика `liblse_compat.so` |
 | **resolv** | `resolv_redirect` | Строка `/etc/resolv.conf` (16 байт) | Замена на `etc//resolv.conf` без изменения длины |
-| **failfast** | `crash_suppressor` | Динамический поиск байт-сигнатур `TARGET_CPU` (ARMv8.0-A CPU feature check) и `TARGET_ATOMIC` (preinit atomic) | Замена на `REPLACEMENT_CPU` (`b +0x64` + NOP-заполнение) и `REPLACEMENT_ATOMIC` (`ldr`/`str` вместо `ldaddal`) для ARMv8.0-A (Snapdragon 660 и др.) без фиксированных смещений |
+| **failfast** | `crash_suppressor` | `.text`-сканирование (AArch64-опкоды без привязки к смещениям) CPU feature check и preinit atomic | Замена на `REPLACEMENT_CPU` (`b +0x64` + NOP) и `ATOMIC_PATCHED_TAIL` (`ldr`/`str` с сохранением префикса `ADRP+ADD`) для ARMv8.0-A |
 | **pty_shell** | `pty_shell` | Строка `/bin/bash` (9 байт) | Замена на `/bin///sh` без изменения длины для совместимости PTY spawner с Android |
 
 ---
