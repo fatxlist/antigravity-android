@@ -9,10 +9,12 @@ fi
 
 if [ "${AGY_DISABLE_NATIVE:-0}" != "1" ]; then
     _agy_bin="${AGY_NATIVE_BIN:-}"
-    if [ -z "$_agy_bin" ] && [ -x "$_agy_script_dir/agy" ]; then
-        _agy_bin="$_agy_script_dir/agy"
-    elif [ -z "$_agy_bin" ] && [ -x "$PREFIX/bin/agy" ]; then
-        _agy_bin="$PREFIX/bin/agy"
+    if [ -z "$_agy_bin" ] && [ "${HOSTTYPE:-}" = "aarch64" ] && [ "${OSTYPE:-}" = "linux-android" ]; then
+        if [ -x "$_agy_script_dir/agy" ]; then
+            _agy_bin="$_agy_script_dir/agy"
+        elif [ -x "$PREFIX/bin/agy" ]; then
+            _agy_bin="$PREFIX/bin/agy"
+        fi
     fi
     if [ -n "$_agy_bin" ] && [ -x "$_agy_bin" ]; then
         export PREFIX

@@ -125,8 +125,10 @@ jobs:
           bash modules/env/tests/run_all.sh
           bash modules/builder/tests/run_all.sh
           cargo test --manifest-path native/agy/Cargo.toml
+          cargo build --manifest-path native/agy/Cargo.toml
           REQUIRE_NATIVE=1 bash modules/builder/04b_build_native.sh
           python3 -B -m unittest discover -s env/tests -v
+          AGY_NATIVE_BIN="$PWD/native/agy/target/debug/agy" python3 -B -m unittest env/tests/test_fix_paths.py -v
           bash env/build.sh assets
           bash env/tests/invariant
           bash web/build.sh

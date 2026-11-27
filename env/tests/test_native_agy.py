@@ -29,13 +29,25 @@ NATIVE_BUILD_SH = os.path.join(REPO_ROOT, "modules", "builder", "04b_build_nativ
 
 
 def _find_native_agy():
-    for cand in (
+    candidates = []
+    env_bin = os.environ.get("AGY_NATIVE_BIN", "").strip()
+    if env_bin:
+        candidates.append(env_bin)
+    candidates.extend([
         os.path.join(OVERLAY_BIN, "agy"),
         os.path.join(REPO_ROOT, "native", "agy", "target", "aarch64-linux-android", "release", "agy"),
         os.path.join(REPO_ROOT, "native", "agy", "target", "release", "agy"),
-    ):
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
+        os.path.join(REPO_ROOT, "native", "agy", "target", "debug", "agy"),
+    ])
+    for cand in candidates:
+        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+            continue
+        try:
+            res = subprocess.run([cand, "version"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                return cand
+        except OSError:
+            continue
     return None
 
 
