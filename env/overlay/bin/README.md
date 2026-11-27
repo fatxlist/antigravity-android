@@ -30,7 +30,7 @@ Executable CLI utilities and zero-dependency stdio MCP servers overlaid into `$P
 - `[agy-notify:post]` Runs under `set -e`, promotes `TITLE` into `MESSAGE` if `MESSAGE` is empty, computes a positive 31-bit CRC32 notification ID, and falls back in order: loopback gateway HTTP -> `rish cmd notification` -> direct `cmd notification` -> stdout log.
 - `[agy-upgrade:cmd_restore]` Runs under `set -euo pipefail`, enforces tar path-traversal safety (`filter='data'` or `realpath` containment under `$HOME`), and auto-reinstalls only `manifests['pkg']` (not `pip`/`npm`).
 - `[agy-upgrade:cmd_apply]` Always completes a `pre_update_<timestamp>.tar.gz` backup before installing an APK and uses `rish -c pm install -r` only when `rish -c id` returns `uid=`.
-- `[agy-fix-paths:grep -rIlZ]` Rewrites only non-binary regular files (skipping symlinks `[ -L ]`), replacing a file only when `sed` succeeds and `cmp -s` reports changes while preserving octal mode bits via `stat -c '%a'`.
+- `[agy-fix-paths:grep -rIlZ]` Scans non-binary files in a single pass (`-e PATTERN -e ENV_PATTERN`), filters out files whose matches already equal `$PREFIX` (and non-line-1 `#!/usr/bin/env` hits), skips symlinks (`[ -L ]`), and batches rewriting via `sort -zu | xargs -0` only when `cmp -s` reports changes while preserving mode (`chmod --reference` / `stat`) and owner (`chown --reference`).
 - `[rish:SDK]` On Android SDK `>= 34`, enforces non-writable `rish_shizuku.dex` (`chmod 400`, exiting `1` if still writable), requires a non-empty `RISH_APPLICATION_ID`, and strips `LD_PRELOAD` and `LD_LIBRARY_PATH` via `env -u` before `exec`.
 - `[cs:exit 0]` Unconditionally exits `0` regardless of arguments.
 
@@ -40,7 +40,7 @@ Executable CLI utilities and zero-dependency stdio MCP servers overlaid into `$P
 - `[agy-daemon:daemonize]` Double-forks the background scheduler, writes/removes `PID_FILE`, redirects output to `LOG_FILE`, mutates `TASKS_FILE` on task subcommands, and triggers async execution via `[agy-daemon:cmd_task_run_now]`.
 - `[agy-notify:gateway_notify]` and `[agy-notify:post]` Send `{"command":"notify","payload":...}` HTTP requests to `/gateway`, cache logos at `/data/local/tmp/agy_logo.png` via `rish`, post/cancel Android system notifications, and run `dumpsys notification --noredact` on `list`.
 - `[agy-upgrade:BACKUP_ROOT]` Stores `0600` archives in private `$HOME/backups` (`0700`, overrideable via `AGY_BACKUP_DIR`), excludes OAuth tokens, account vaults, daemon runtime/token files, and `.bash_history` via `_gemini_filter`, updates `latest.tar.gz` as an atomic symlink (with `0600` copy fallback if symlinks are unsupported), extracts into `$HOME`, runs `pkg install` and `agy-fix-paths`, installs APKs via `rish pm install -r`, or stages `/storage/emulated/0/Download/agy_update.apk`.
-- `[agy-fix-paths:mv]` Writes temporary `<file>.agyfix.<pid>` files and atomically replaces modified text files in place.
+- `[agy-fix-paths:mv]` Writes temporary `<dir>/.agyfix.XXXXXX` files via `mktemp` and atomically replaces modified text files in place.
 - `[rish:SDK]` May `chmod 400` `rish_shizuku.dex` on SDK `>= 34` and `[rish:exec]` replaces the current process via `exec /system/bin/app_process`.
 
 ## Verification
